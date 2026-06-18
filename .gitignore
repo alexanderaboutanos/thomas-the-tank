@@ -1,0 +1,37 @@
+# Secrets / local config — never commit. (.example files are kept on purpose.)
+.env
+.env.*
+!.env.example
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+
+# Key material
+*.pem
+*.p8
+*.key
+rsa_key*
+
+# Terraform state & working dirs (but keep .terraform.lock.hcl tracked)
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Lambda build artifacts
+infra/build/
+*.zip
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# OS
+.DS_Store

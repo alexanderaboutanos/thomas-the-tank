@@ -1,0 +1,4 @@
+# Copy to terraform.tfvars and fill in (kept out of git).
+confluent_cloud_api_key    = "..."
+confluent_cloud_api_secret = "..."
+region                     = "us-east-1"

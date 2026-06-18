@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>North Western Railway — Live Engine Telemetry</title>
+  <style>
+    :root {
+      --nwr-blue: #1d4e89;
+      --nwr-blue-dark: #15375f;
+      --nwr-red:  #c8102e;
+      --nwr-gold: #f2b705;
+      --ink:      #1b2330;
+      --paper:    #f5f1e6;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: "Segoe UI", system-ui, sans-serif;
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 1px 1px, rgba(0,0,0,.04) 1px, transparent 0) 0 0 / 22px 22px,
+        var(--paper);
+    }
+    header {
+      background: linear-gradient(160deg, var(--nwr-blue), var(--nwr-blue-dark));
+      color: #fff;
+      border-bottom: 6px solid var(--nwr-gold);
+    }
+    .hero {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 1.5rem 1.25rem 0;
+    }
+    .badge {
+      display: inline-block;
+      font-size: .72rem;
+      letter-spacing: .18em;
+      text-transform: uppercase;
+      background: var(--nwr-red);
+      color: #fff;
+      padding: .25rem .6rem;
+      border-radius: 2px;
+      font-weight: 700;
+    }
+    h1 {
+      margin: .6rem 0 .2rem;
+      font-size: 2rem;
+      line-height: 1.1;
+    }
+    .tagline { margin: 0 0 1rem; opacity: .85; font-style: italic; }
+    .hero img {
+      display: block;
+      width: 100%;
+      max-width: 960px;
+      border-radius: 10px 10px 0 0;
+      box-shadow: 0 -2px 0 var(--nwr-gold) inset;
+    }
+    main { max-width: 960px; margin: 0 auto; padding: 1.5rem 1.25rem 3rem; }
+    .meta {
+      color: #5c6675;
+      font-size: .85rem;
+      margin: 0 0 1rem;
+    }
+    .meta code { background: #fff; padding: .1rem .35rem; border-radius: 3px; border: 1px solid #ddd; }
+    .panel {
+      background: #fff;
+      border: 1px solid #e2ddcf;
+      border-radius: 10px;
+      overflow: hidden;
+      box-shadow: 0 8px 24px rgba(21,55,95,.08);
+    }
+    table { border-collapse: collapse; width: 100%; }
+    thead th {
+      background: var(--nwr-blue);
+      color: #fff;
+      text-align: left;
+      padding: .7rem .85rem;
+      font-size: .8rem;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+    tbody td { border-bottom: 1px solid #eee; padding: .65rem .85rem; }
+    tbody tr:nth-child(even) { background: #faf8f1; }
+    tbody tr:hover { background: #fff7df; }
+    .engine { font-weight: 700; color: var(--nwr-blue-dark); }
+    .doors-open  { color: var(--nwr-red); font-weight: 600; }
+    .doors-closed { color: #2e7d32; font-weight: 600; }
+    .muted { color: #98a0ac; font-size: .85rem; }
+    footer { text-align: center; color: #98a0ac; font-size: .8rem; padding-bottom: 2rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="hero">
+      <span class="badge">Sodor &bull; Live</span>
+      <h1>North Western Railway — Engine Telemetry</h1>
+      <p class="tagline">Really useful engines, reporting in from the Island of Sodor.</p>
+      <img src="thomas.png" alt="Thomas the Tank Engine emerging from a tunnel" />
+    </div>
+  </header>
+
+  <main>
+    <p class="meta">Polling <code id="ep"></code> every 3s. Set <code>API_BASE</code> in the source.</p>
+    <div class="panel">
+      <table>
+        <thead>
+          <tr><th>Engine</th><th>Speed (km/h)</th><th>Lat</th><th>Lon</th><th>Doors</th><th>Last seen</th></tr>
+        </thead>
+        <tbody id="rows"><tr><td colspan="6" class="muted">waiting for the engines to whistle in…</td></tr></tbody>
+      </table>
+    </div>
+    <footer>Confluent Cloud → Snowflake → Lambda → this page. Toot toot!</footer>
+  </main>
+
+  <script>
+    // Point this at your deployed API Gateway endpoint.
+    const API_BASE = "https://YOUR-API-ID.execute-api.REGION.amazonaws.com";
+    document.getElementById("ep").textContent = API_BASE + "/latest";
+
+    function doorCell(status) {
+      const cls = status === "open" ? "doors-open" : "doors-closed";
+      return `<span class="${cls}">${status}</span>`;
+    }
+
+    async function refresh() {
+      try {
+        const res = await fetch(API_BASE + "/latest");
+        const engines = await res.json(); // [{engine_id, speed_kmh, latitude, longitude, door_status, timestamp}, ...]
+        const rows = engines.map(e => `<tr>
+          <td class="engine">${e.engine_id}</td><td>${e.speed_kmh}</td>
+          <td>${e.latitude}</td><td>${e.longitude}</td>
+          <td>${doorCell(e.door_status)}</td><td>${e.timestamp}</td></tr>`).join("");
+        document.getElementById("rows").innerHTML = rows || '<tr><td colspan="6" class="muted">no rows</td></tr>';
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    refresh();
+    setInterval(refresh, 3000);
+    // Next step: swap the table for a map (e.g. Leaflet) and plot latitude/longitude.
+  </script>
+</body>
+</html>

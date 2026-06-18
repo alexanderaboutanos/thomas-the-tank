@@ -1,0 +1,4 @@
+# Copy to terraform.tfvars and fill in (kept out of git).
+organization_name = "..."
+account_name      = "..."
+admin_user        = "..."
