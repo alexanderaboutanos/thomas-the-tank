@@ -1,15 +1,19 @@
 """
 Simulated engine telemetry producer for Confluent Cloud — the engines of Sodor.
 
-Emits one JSON message per engine every INTERVAL_SECONDS to TOPIC.
-Messages are keyed by engine_id so all events for a given engine land on the
-same partition, preserving per-engine ordering.
+Emits one Avro message per engine every INTERVAL_SECONDS to TOPIC. Messages are
+keyed by engine_id so all events for a given engine land on the same partition,
+preserving per-engine ordering.
+
+Values are serialized as Avro against the schema registered in Confluent's
+Schema Registry (subject "<TOPIC>-value"). The schema is owned by Terraform
+(see ../confluent), so this producer runs read-only: auto.register.schemas is
+off and use.latest.version is on, meaning it fetches the registered schema and
+serializes against it rather than registering anything itself. Bump the schema
+in Terraform, `apply`, and this producer picks it up on its next message.
 
 Config comes from environment variables (see .env.example).
-Start here with plain JSON; once the loop works end-to-end, switch to Avro
-+ Schema Registry (the harder, more interesting version).
 """
-import json
 import os
 import random
 import time
@@ -17,6 +21,13 @@ import uuid
 from datetime import datetime, timezone
 
 from confluent_kafka import Producer
+from confluent_kafka.schema_registry import SchemaRegistryClient
+from confluent_kafka.schema_registry.avro import AvroSerializer
+from confluent_kafka.serialization import (
+    MessageField,
+    SerializationContext,
+    StringSerializer,
+)
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -24,17 +35,41 @@ load_dotenv()
 TOPIC = os.environ.get("TOPIC", "sodor-telemetry")
 INTERVAL_SECONDS = float(os.environ.get("INTERVAL_SECONDS", "2"))
 NUM_ENGINES = int(os.environ.get("NUM_ENGINES", "5"))
+SCHEMA_FILE = os.path.join(os.path.dirname(__file__), "telemetry.avsc")
 
-conf = {
-    "bootstrap.servers": os.environ["BOOTSTRAP_SERVERS"],
-    "security.protocol": "SASL_SSL",
-    "sasl.mechanisms": "PLAIN",
-    "sasl.username": os.environ["KAFKA_API_KEY"],
-    "sasl.password": os.environ["KAFKA_API_SECRET"],
-    "client.id": "sodor-telemetry-producer",
-}
+producer = Producer(
+    {
+        "bootstrap.servers": os.environ["BOOTSTRAP_SERVERS"],
+        "security.protocol": "SASL_SSL",
+        "sasl.mechanisms": "PLAIN",
+        "sasl.username": os.environ["KAFKA_API_KEY"],
+        "sasl.password": os.environ["KAFKA_API_SECRET"],
+        "client.id": "sodor-telemetry-producer",
+    }
+)
 
-producer = Producer(conf)
+# Schema Registry auth is its own credential pair, separate from the Kafka key.
+schema_registry_client = SchemaRegistryClient(
+    {
+        "url": os.environ["SCHEMA_REGISTRY_URL"],
+        "basic.auth.user.info": (
+            f"{os.environ['SCHEMA_REGISTRY_API_KEY']}:"
+            f"{os.environ['SCHEMA_REGISTRY_API_SECRET']}"
+        ),
+    }
+)
+
+with open(SCHEMA_FILE) as f:
+    schema_str = f.read()
+
+# auto.register off + use.latest.version on => Terraform owns the schema; we just
+# read whatever version is currently registered and serialize against it.
+avro_serializer = AvroSerializer(
+    schema_registry_client,
+    schema_str,
+    conf={"auto.register.schemas": False, "use.latest.version": True},
+)
+key_serializer = StringSerializer("utf_8")
 
 # The engines of the North Western Railway, in number order. We take the
 # first NUM_ENGINES of these; anything beyond the roster falls back to a
@@ -96,7 +131,7 @@ def build_event(engine_id, state):
 
 def main():
     print(
-        f"Producing to '{TOPIC}' every {INTERVAL_SECONDS}s "
+        f"Producing Avro to '{TOPIC}' every {INTERVAL_SECONDS}s "
         f"for {NUM_ENGINES} engines. Ctrl-C to stop."
     )
     try:
@@ -105,10 +140,12 @@ def main():
                 engines[engine_id] = step(state)
                 event = build_event(engine_id, engines[engine_id])
                 producer.produce(
-                    TOPIC,
-                    key=engine_id,
-                    value=json.dumps(event),
-                    callback=delivery_report,
+                    topic=TOPIC,
+                    key=key_serializer(engine_id),
+                    value=avro_serializer(
+                        event, SerializationContext(TOPIC, MessageField.VALUE)
+                    ),
+                    on_delivery=delivery_report,
                 )
             producer.poll(0)
             time.sleep(INTERVAL_SECONDS)

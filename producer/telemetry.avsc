@@ -1,0 +1,17 @@
+{
+  "type": "record",
+  "name": "EngineTelemetry",
+  "namespace": "sodor.telemetry",
+  "doc": "One telemetry reading from a North Western Railway engine. Registered as the 'sodor-telemetry-value' subject; this file is the single source of truth (Terraform registers it, the producer reads it).",
+  "fields": [
+    { "name": "event_id", "type": "string", "doc": "UUID for this reading." },
+    { "name": "engine_id", "type": "string", "doc": "Engine name (e.g. 'Thomas'); also the Kafka message key." },
+    { "name": "timestamp", "type": "string", "doc": "ISO-8601 UTC instant the reading was taken. Kept as a string for now; switching to a long + logical-type timestamp-millis is a planned schema-evolution exercise (step 7)." },
+    { "name": "latitude", "type": "double" },
+    { "name": "longitude", "type": "double" },
+    { "name": "speed_kmh", "type": "double" },
+    { "name": "heading", "type": "double" },
+    { "name": "door_status", "type": "string", "doc": "'open' or 'closed'. A plain string rather than an enum so adding values later stays backward-compatible." },
+    { "name": "car_temperature_c", "type": "double" }
+  ]
+}

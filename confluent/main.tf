@@ -20,10 +20,11 @@ provider "confluent" {
 resource "confluent_environment" "sodor" {
   display_name = "sodor-railway"
 
-  # Stream Governance (Schema Registry) — enabled when we add Avro. To turn on:
-  # stream_governance {
-  #   package = "ESSENTIALS"
-  # }
+  # Stream Governance provisions the environment's Schema Registry cluster.
+  # ESSENTIALS is the free tier — enough for the Avro schema + evolution work.
+  stream_governance {
+    package = "ESSENTIALS"
+  }
 }
 
 resource "confluent_kafka_cluster" "basic" {
@@ -131,6 +132,92 @@ resource "confluent_kafka_acl" "app-producer-write-on-topic" {
   }
 }
 
-# TODO: confluent_schema for the Avro value schema (Avro step).
+# ─── Schema Registry: the Avro value schema, owned by Terraform ──────────────
+
+# The SR cluster is provisioned by the environment's stream_governance block.
+# depends_on defers this read until apply (after governance is enabled), which
+# avoids a first-run failure when the SR cluster doesn't exist at plan time.
+data "confluent_schema_registry_cluster" "sr" {
+  environment {
+    id = confluent_environment.sodor.id
+  }
+  depends_on = [confluent_environment.sodor]
+}
+
+# SR API key for app-manager — Terraform uses it to register/evolve schemas.
+resource "confluent_api_key" "app-manager-sr-api-key" {
+  display_name = "sodor-app-manager-sr-api-key"
+  description  = "Schema Registry API key used by Terraform to manage schemas"
+  owner {
+    id          = confluent_service_account.app-manager.id
+    api_version = confluent_service_account.app-manager.api_version
+    kind        = confluent_service_account.app-manager.kind
+  }
+  managed_resource {
+    id          = data.confluent_schema_registry_cluster.sr.id
+    api_version = data.confluent_schema_registry_cluster.sr.api_version
+    kind        = data.confluent_schema_registry_cluster.sr.kind
+    environment {
+      id = confluent_environment.sodor.id
+    }
+  }
+}
+
+# Lets app-manager register/manage schemas under any subject in this SR cluster.
+resource "confluent_role_binding" "app-manager-sr-resource-owner" {
+  principal   = "User:${confluent_service_account.app-manager.id}"
+  role_name   = "ResourceOwner"
+  crn_pattern = "${data.confluent_schema_registry_cluster.sr.resource_name}/subject=*"
+}
+
+# The registered Avro value schema. The .avsc file is the single source of
+# truth, shared with the producer. Evolving the schema = edit the file + apply;
+# the compatibility check runs at apply time.
+resource "confluent_schema" "telemetry-value" {
+  schema_registry_cluster {
+    id = data.confluent_schema_registry_cluster.sr.id
+  }
+  rest_endpoint = data.confluent_schema_registry_cluster.sr.rest_endpoint
+  subject_name  = "${confluent_kafka_topic.telemetry.topic_name}-value"
+  format        = "AVRO"
+  schema        = file("${path.module}/../producer/telemetry.avsc")
+
+  credentials {
+    key    = confluent_api_key.app-manager-sr-api-key.id
+    secret = confluent_api_key.app-manager-sr-api-key.secret
+  }
+
+  depends_on = [confluent_role_binding.app-manager-sr-resource-owner]
+}
+
+# ─── app-producer: read-only access to its subject + its own SR key ──────────
+
+# SR API key the producer uses to look up the registered schema.
+resource "confluent_api_key" "app-producer-sr-api-key" {
+  display_name = "sodor-app-producer-sr-api-key"
+  description  = "Schema Registry API key for producer.py — reads the value schema"
+  owner {
+    id          = confluent_service_account.app-producer.id
+    api_version = confluent_service_account.app-producer.api_version
+    kind        = confluent_service_account.app-producer.kind
+  }
+  managed_resource {
+    id          = data.confluent_schema_registry_cluster.sr.id
+    api_version = data.confluent_schema_registry_cluster.sr.api_version
+    kind        = data.confluent_schema_registry_cluster.sr.kind
+    environment {
+      id = confluent_environment.sodor.id
+    }
+  }
+}
+
+# The producer never registers schemas (auto.register is off); it only reads the
+# latest version of its own subject, so DeveloperRead on that subject suffices.
+resource "confluent_role_binding" "app-producer-sr-read" {
+  principal   = "User:${confluent_service_account.app-producer.id}"
+  role_name   = "DeveloperRead"
+  crn_pattern = "${data.confluent_schema_registry_cluster.sr.resource_name}/subject=${confluent_kafka_topic.telemetry.topic_name}-value"
+}
+
 # TODO: confluent_connector.snowflake_sink — needs the Snowflake account URL,
 #   key-pair user, private key, and target DB/schema/table from ../snowflake.
