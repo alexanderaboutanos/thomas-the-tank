@@ -43,6 +43,16 @@ How long should messages be retained in a topic?
 - well, we pay for storage on a cluster, so if messages build up and sit, the bill could get very large very fast. So set it low?
 - setting it low also has risks. if consumers are all doing their job, you don't need a long window because messages will be gone and offset moved. but we all know that consumers can go down. In that instance, if consumers go down for 24 hours, you might not want valuable messages expiring on the topic.
 
+How does Postgres differ from Snowflake?
+- **OLTP** (transactional databases — Postgres, MySQL): built for lots of tiny, fast reads/writes. "Fetch *this one* engine's current status." Millisecond, high-concurrency, per-request.
+- **OLAP** (analytical warehouses — Snowflake): built to **scan and aggregate billions of rows**. "Average speed across the whole fleet for six months." Seconds-to-minutes, heavy, columnar, not meant for thousands of concurrent tiny lookups.
+
+Snowflake is firmly OLAP. So it *is* a database, but it's the analytical kind — optimized for big sweeping questions, not for serving a single user's button-click instantly.
+
+What is tiered storage in a cluster?
+- Kafka keeps recent ("hot") segments on fast local broker disk and offloads older ("cold") segments to cheap remote object storage (e.g. S3).
+- Consumers read either tier transparently, so you can keep a long retention window without paying for expensive local disk.
+
 
 
 ## Avro
