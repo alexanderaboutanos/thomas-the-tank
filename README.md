@@ -48,6 +48,7 @@ Build the unfamiliar foundation first; the AWS UI last. Each step is its own dir
 - [ ] **5. The Snowflake hop** (`/snowflake`, then the connector in `/confluent`) — set up the Snowflake DB/table + a key-pair user, then configure the managed Snowflake Sink Connector. Confirm rows land in the table.
 - [ ] **6. The UI** (`/infra` + `/web`) — deploy the Lambda/API + static site, point the UI at the API.
 - [ ] **7. Play** — evolve the schema, watch consumer lag, reason about partitioning by `engine_id`. This is the fun part — tinker and see what breaks.
+- [ ] **8. Reach goal** (after everything else) — add a true live-from-Confluent feed (WebSocket/SSE bridge) alongside a separate analytical-query feature over Snowflake.
 
 > Tip: stand the Confluent + Snowflake resources up **by hand once** (console/CLI) to
 > learn what each piece is, *then* codify them into the Terraform here. Writing IaC for
