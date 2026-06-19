@@ -39,13 +39,15 @@ flowchart LR
 
 ## Build order
 
-Build the unfamiliar foundation first; the AWS UI last. Each step is its own directory.
+Build the unfamiliar foundation first; the AWS UI last. Each step is its own directory; the checkbox is its status, and ← marks where we are.
 
-1. **Accounts** — create the Confluent + Snowflake accounts.
-2. **One message flowing** (`/producer`) — spin up a Basic cluster + a `sodor-telemetry` topic, then run `producer.py`. Start with plain JSON; add Avro + Schema Registry once the loop works.
-3. **The Snowflake hop** (`/snowflake`, then the connector in `/confluent`) — set up the Snowflake DB/table + a key-pair user, then configure the managed Snowflake Sink Connector. Confirm rows land in the table.
-4. **The UI** (`/infra` + `/web`) — deploy the Lambda/API + static site, point the UI at the API.
-5. **Play** — evolve the schema, watch consumer lag, reason about partitioning by `engine_id`. This is the fun part — tinker and see what breaks.
+- [x] **1. Accounts** — create the Confluent + Snowflake accounts.
+- [x] **2. One message flowing** (`/producer`) — spin up a Basic cluster + a `sodor-telemetry` topic, then run `producer.py` with plain JSON.
+- [x] **3. Codify the Confluent Terraform** (`/confluent`) — by-hand setup translated to IaC (provider pin, producer + admin service accounts, API keys, ACL, outputs); imported the surviving environment and recreated the cluster/topic/identities under Terraform. Topic partitioned at 3.
+- [ ] **4. Avro + Schema Registry** (`/producer`, `/confluent`) ← *we are here* — upgrade the producer off plain JSON to a registered Avro schema; this sets up the schema-evolution experiments.
+- [ ] **5. The Snowflake hop** (`/snowflake`, then the connector in `/confluent`) — set up the Snowflake DB/table + a key-pair user, then configure the managed Snowflake Sink Connector. Confirm rows land in the table.
+- [ ] **6. The UI** (`/infra` + `/web`) — deploy the Lambda/API + static site, point the UI at the API.
+- [ ] **7. Play** — evolve the schema, watch consumer lag, reason about partitioning by `engine_id`. This is the fun part — tinker and see what breaks.
 
 > Tip: stand the Confluent + Snowflake resources up **by hand once** (console/CLI) to
 > learn what each piece is, *then* codify them into the Terraform here. Writing IaC for
@@ -63,12 +65,3 @@ Build the unfamiliar foundation first; the AWS UI last. Each step is its own dir
 - Schema Registry + a schema-evolution change you made and what broke / didn't.
 - Snowflake Sink Connector config: batching, and why the warehouse view is near-real-time, not sub-second (and that Snowpipe Streaming / a direct Kafka tap is the lower-latency option).
 - Consumer lag: what you saw and how you monitor it in production.
-
-## Status
-
-- [ ] Accounts created
-- [ ] Cluster + topic up, producer flowing
-- [ ] Snowflake table + key-pair user
-- [ ] Sink connector landing rows
-- [ ] Lambda/API + web UI deployed
-- [ ] Schema evolution / lag experiments done

@@ -1,4 +1,8 @@
-# Copy to terraform.tfvars and fill in (kept out of git).
+# Copy to terraform.tfvars and fill in (gitignored).
+# Cloud (account-level) API key — mint it in the console under API keys with the
+# "Cloud resource management" scope.
 confluent_cloud_api_key    = "..."
 confluent_cloud_api_secret = "..."
-region                     = "us-east-1"
+
+# AWS region for the cluster.
+region = "us-east-1"
