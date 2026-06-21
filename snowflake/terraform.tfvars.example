@@ -1,4 +1,20 @@
-# Copy to terraform.tfvars and fill in (kept out of git).
-organization_name = "..."
-account_name      = "..."
-admin_user        = "..."
+# Copy to terraform.tfvars and fill in (gitignored).
+
+# ── Admin connection (how Terraform authenticates) ──
+# org + account name: Snowsight > Admin > Account, or the two segments of your
+# account URL  https://<org>-<account>.snowflakecomputing.com
+snowflake_organization_name = "..."
+snowflake_account_name      = "..."
+snowflake_admin_user        = "..." # e.g. your ACCOUNTADMIN login
+
+# Full PEM of the admin key pair; register the public half on the admin user
+# first (see README "Stand it up"). Gitignored by rsa_key* / *.p8.
+snowflake_admin_private_key_path = "rsa_key_admin.p8"
+
+# ── Connector identity ──
+# The connector's RSA PUBLIC key, BODY ONLY — strip the -----BEGIN/END----- lines
+# and join to one line:  grep -v '^-----' rsa_key_connector.pub | tr -d '\n'
+connector_rsa_public_key = "MIIBIjANBgkqhk..."
+
+# Names default to SODOR_WH / SODOR_RAILWAY / TELEMETRY / TELEMETRY_RAW and
+# SODOR_CONNECTOR(_ROLE) — override here only if you change them.
