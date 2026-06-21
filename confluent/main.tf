@@ -219,5 +219,157 @@ resource "confluent_role_binding" "app-producer-sr-read" {
   crn_pattern = "${data.confluent_schema_registry_cluster.sr.resource_name}/subject=${confluent_kafka_topic.telemetry.topic_name}-value"
 }
 
-# TODO: confluent_connector.snowflake_sink — needs the Snowflake account URL,
-#   key-pair user, private key, and target DB/schema/table from ../snowflake.
+# ─── app-connector: the managed Snowflake Sink connector's Kafka identity ─────
+
+# The connector is a Kafka consumer, so it gets its own service account with the
+# minimal ACLs a fully-managed sink needs: DESCRIBE the cluster, READ the topic,
+# READ its consumer group, and CREATE/WRITE its dead-letter-queue topic. Confluent
+# names managed-connector groups "connect-lcc-<id>" and DLQ topics "dlq-lcc-<id>",
+# so those two are PREFIXED ACLs (the id isn't known until the connector exists).
+resource "confluent_service_account" "app-connector" {
+  display_name = "sodor-app-connector"
+  description  = "Identity for the managed Snowflake Sink connector — reads telemetry"
+}
+
+resource "confluent_kafka_acl" "app-connector-describe-cluster" {
+  kafka_cluster {
+    id = confluent_kafka_cluster.basic.id
+  }
+  resource_type = "CLUSTER"
+  resource_name = "kafka-cluster"
+  pattern_type  = "LITERAL"
+  principal     = "User:${confluent_service_account.app-connector.id}"
+  host          = "*"
+  operation     = "DESCRIBE"
+  permission    = "ALLOW"
+  rest_endpoint = confluent_kafka_cluster.basic.rest_endpoint
+  credentials {
+    key    = confluent_api_key.app-manager-kafka-api-key.id
+    secret = confluent_api_key.app-manager-kafka-api-key.secret
+  }
+}
+
+resource "confluent_kafka_acl" "app-connector-read-on-topic" {
+  kafka_cluster {
+    id = confluent_kafka_cluster.basic.id
+  }
+  resource_type = "TOPIC"
+  resource_name = confluent_kafka_topic.telemetry.topic_name
+  pattern_type  = "LITERAL"
+  principal     = "User:${confluent_service_account.app-connector.id}"
+  host          = "*"
+  operation     = "READ"
+  permission    = "ALLOW"
+  rest_endpoint = confluent_kafka_cluster.basic.rest_endpoint
+  credentials {
+    key    = confluent_api_key.app-manager-kafka-api-key.id
+    secret = confluent_api_key.app-manager-kafka-api-key.secret
+  }
+}
+
+resource "confluent_kafka_acl" "app-connector-read-on-group" {
+  kafka_cluster {
+    id = confluent_kafka_cluster.basic.id
+  }
+  resource_type = "GROUP"
+  resource_name = "connect-lcc-"
+  pattern_type  = "PREFIXED"
+  principal     = "User:${confluent_service_account.app-connector.id}"
+  host          = "*"
+  operation     = "READ"
+  permission    = "ALLOW"
+  rest_endpoint = confluent_kafka_cluster.basic.rest_endpoint
+  credentials {
+    key    = confluent_api_key.app-manager-kafka-api-key.id
+    secret = confluent_api_key.app-manager-kafka-api-key.secret
+  }
+}
+
+resource "confluent_kafka_acl" "app-connector-dlq-create" {
+  kafka_cluster {
+    id = confluent_kafka_cluster.basic.id
+  }
+  resource_type = "TOPIC"
+  resource_name = "dlq-lcc-"
+  pattern_type  = "PREFIXED"
+  principal     = "User:${confluent_service_account.app-connector.id}"
+  host          = "*"
+  operation     = "CREATE"
+  permission    = "ALLOW"
+  rest_endpoint = confluent_kafka_cluster.basic.rest_endpoint
+  credentials {
+    key    = confluent_api_key.app-manager-kafka-api-key.id
+    secret = confluent_api_key.app-manager-kafka-api-key.secret
+  }
+}
+
+resource "confluent_kafka_acl" "app-connector-dlq-write" {
+  kafka_cluster {
+    id = confluent_kafka_cluster.basic.id
+  }
+  resource_type = "TOPIC"
+  resource_name = "dlq-lcc-"
+  pattern_type  = "PREFIXED"
+  principal     = "User:${confluent_service_account.app-connector.id}"
+  host          = "*"
+  operation     = "WRITE"
+  permission    = "ALLOW"
+  rest_endpoint = confluent_kafka_cluster.basic.rest_endpoint
+  credentials {
+    key    = confluent_api_key.app-manager-kafka-api-key.id
+    secret = confluent_api_key.app-manager-kafka-api-key.secret
+  }
+}
+
+# Input format is AVRO, so the connector reads the registered value schema from
+# Schema Registry — DeveloperRead on its subject, same as the producer.
+resource "confluent_role_binding" "app-connector-sr-read" {
+  principal   = "User:${confluent_service_account.app-connector.id}"
+  role_name   = "DeveloperRead"
+  crn_pattern = "${data.confluent_schema_registry_cluster.sr.resource_name}/subject=${confluent_kafka_topic.telemetry.topic_name}-value"
+}
+
+# ─── The managed Snowflake Sink connector ────────────────────────────────────
+
+# Reads sodor-telemetry (Avro) and lands it in Snowflake via classic Snowpipe.
+# Snowflake-side values come from ../snowflake outputs; the private key is the
+# connector half of the key pair (body only, one line). See ../SNOWFLAKE.md.
+resource "confluent_connector" "snowflake_sink" {
+  environment {
+    id = confluent_environment.sodor.id
+  }
+  kafka_cluster {
+    id = confluent_kafka_cluster.basic.id
+  }
+
+  config_sensitive = {
+    "snowflake.private.key" = var.snowflake_private_key
+  }
+
+  config_nonsensitive = {
+    "connector.class"            = "SnowflakeSink"
+    "name"                       = "sodor-snowflake-sink"
+    "kafka.auth.mode"            = "SERVICE_ACCOUNT"
+    "kafka.service.account.id"   = confluent_service_account.app-connector.id
+    "topics"                     = confluent_kafka_topic.telemetry.topic_name
+    "input.data.format"          = "AVRO"
+    "snowflake.ingestion.method" = "SNOWPIPE" # classic (default); SNOWPIPE_STREAMING is the step-7 upgrade
+    "snowflake.url.name"         = var.snowflake_url
+    "snowflake.user.name"        = var.snowflake_connector_user
+    "snowflake.role.name"        = var.snowflake_connector_role
+    "snowflake.database.name"    = var.snowflake_database
+    "snowflake.schema.name"      = var.snowflake_schema
+    "snowflake.topic2table.map"  = "${confluent_kafka_topic.telemetry.topic_name}:${var.snowflake_table}"
+    "tasks.max"                  = "1"
+  }
+
+  # ACLs + the SR binding must land before the connector starts consuming.
+  depends_on = [
+    confluent_kafka_acl.app-connector-describe-cluster,
+    confluent_kafka_acl.app-connector-read-on-topic,
+    confluent_kafka_acl.app-connector-read-on-group,
+    confluent_kafka_acl.app-connector-dlq-create,
+    confluent_kafka_acl.app-connector-dlq-write,
+    confluent_role_binding.app-connector-sr-read,
+  ]
+}

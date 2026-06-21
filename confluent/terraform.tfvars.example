@@ -4,5 +4,20 @@
 confluent_cloud_api_key    = "..."
 confluent_cloud_api_secret = "..."
 
-# AWS region for the cluster.
-region = "us-east-1"
+# AWS region for the cluster. MUST match your Snowflake account's region — the
+# fully-managed Snowflake Sink connector requires Kafka and Snowflake in the same
+# region. Check yours in Snowsight with:  SELECT CURRENT_REGION();
+region = "us-east-2"
+
+# ── Snowflake Sink connector ──
+# All but the private key come straight from `terraform output` in ../snowflake.
+snowflake_url            = "https://<org>-<account>.snowflakecomputing.com"
+snowflake_connector_user = "SODOR_CONNECTOR"
+snowflake_connector_role = "SODOR_CONNECTOR_ROLE"
+snowflake_database       = "SODOR_RAILWAY"
+snowflake_schema         = "TELEMETRY"
+snowflake_table          = "TELEMETRY_RAW"
+
+# Connector's PRIVATE key, BODY ONLY (strip the -----BEGIN/END----- lines):
+#   grep -v '^-----' ../snowflake/rsa_key_connector.p8 | tr -d '\n'
+snowflake_private_key = "MIIEvgIBADANBgkqhk..."
