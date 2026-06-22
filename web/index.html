@@ -10,6 +10,7 @@
       --nwr-blue-dark: #15375f;
       --nwr-red:  #c8102e;
       --nwr-gold: #f2b705;
+      --green:    #2e7d32;
       --ink:      #1b2330;
       --paper:    #f5f1e6;
     }
@@ -69,7 +70,41 @@
       border-radius: 10px;
       overflow: hidden;
       box-shadow: 0 8px 24px rgba(21,55,95,.08);
+      margin-bottom: 1.5rem;
     }
+    .panel > h2 {
+      margin: 0;
+      padding: .85rem 1rem;
+      font-size: .8rem;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      background: #faf8f1;
+      border-bottom: 1px solid #eee;
+      color: var(--nwr-blue-dark);
+    }
+    .panel .body { padding: 1rem; }
+
+    /* Master on/off lever switch */
+    .control { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+    .switch { position: relative; display: inline-block; width: 78px; height: 38px; flex: none; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider {
+      position: absolute; cursor: pointer; inset: 0;
+      background: #b9202f; border-radius: 38px; transition: .25s;
+      box-shadow: inset 0 2px 4px rgba(0,0,0,.3);
+    }
+    .slider::before {
+      content: ""; position: absolute; height: 30px; width: 30px; left: 4px; bottom: 4px;
+      background: #fff; border-radius: 50%; transition: .25s;
+      box-shadow: 0 2px 3px rgba(0,0,0,.4);
+    }
+    .switch input:checked + .slider { background: var(--green); }
+    .switch input:checked + .slider::before { transform: translateX(40px); }
+    .status { font-weight: 700; }
+    .status.on  { color: var(--green); }
+    .status.off { color: var(--nwr-red); }
+    .hint { color: #98a0ac; font-size: .82rem; margin: .5rem 0 0; }
+
     table { border-collapse: collapse; width: 100%; }
     thead th {
       background: var(--nwr-blue);
@@ -85,8 +120,19 @@
     tbody tr:hover { background: #fff7df; }
     .engine { font-weight: 700; color: var(--nwr-blue-dark); }
     .doors-open  { color: var(--nwr-red); font-weight: 600; }
-    .doors-closed { color: #2e7d32; font-weight: 600; }
+    .doors-closed { color: var(--green); font-weight: 600; }
     .muted { color: #98a0ac; font-size: .85rem; }
+
+    .buttons { display: flex; gap: .6rem; flex-wrap: wrap; margin-bottom: 1rem; }
+    .btn {
+      font: inherit; font-weight: 600; cursor: pointer;
+      background: var(--nwr-blue); color: #fff; border: 0;
+      padding: .55rem .9rem; border-radius: 6px;
+      box-shadow: 0 2px 0 var(--nwr-blue-dark);
+    }
+    .btn:hover { background: var(--nwr-blue-dark); }
+    .btn:active { transform: translateY(1px); box-shadow: none; }
+    #queryResult h3 { margin: .2rem 0 .6rem; color: var(--nwr-blue-dark); font-size: 1rem; }
     footer { text-align: center; color: #98a0ac; font-size: .8rem; padding-bottom: 2rem; }
   </style>
 </head>
@@ -101,44 +147,138 @@
   </header>
 
   <main>
-    <p class="meta">Polling <code id="ep"></code> every 3s. Set <code>API_BASE</code> in the source.</p>
+    <p class="meta">Serving API: <code id="ep"></code>. Set <code>API_BASE</code> in the source.</p>
+
+    <!-- Master switch: drives /produce and polls /latest while on -->
     <div class="panel">
+      <h2>Master switch</h2>
+      <div class="body">
+        <div class="control">
+          <label class="switch">
+            <input type="checkbox" id="switch" />
+            <span class="slider"></span>
+          </label>
+          <span class="status off" id="status">Stopped</span>
+        </div>
+        <p class="hint">
+          While on, your browser calls <code>POST /produce</code> every 2s and polls
+          <code>GET /latest</code>. It runs per-viewer — close the tab and production stops,
+          so a public URL scales to zero.
+        </p>
+      </div>
+    </div>
+
+    <!-- Live view: latest row per engine from Snowflake -->
+    <div class="panel">
+      <h2>Live view — latest per engine</h2>
       <table>
         <thead>
-          <tr><th>Engine</th><th>Speed (km/h)</th><th>Lat</th><th>Lon</th><th>Doors</th><th>Last seen</th></tr>
+          <tr><th>Engine</th><th>Speed (km/h)</th><th>Lat</th><th>Lon</th><th>Doors</th><th>Last seen (UTC)</th></tr>
         </thead>
-        <tbody id="rows"><tr><td colspan="6" class="muted">waiting for the engines to whistle in…</td></tr></tbody>
+        <tbody id="rows"><tr><td colspan="6" class="muted">flip the switch to wake the engines…</td></tr></tbody>
       </table>
     </div>
+
+    <!-- Analytics: canned, server-side queries -->
+    <div class="panel">
+      <h2>Analytics</h2>
+      <div class="body">
+        <div class="buttons" id="queryButtons"></div>
+        <div id="queryResult"><p class="muted">pick a query above.</p></div>
+      </div>
+    </div>
+
     <footer>Confluent Cloud → Snowflake → Lambda → this page. Toot toot!</footer>
   </main>
 
   <script>
-    // Point this at your deployed API Gateway endpoint.
-    const API_BASE = "https://YOUR-API-ID.execute-api.REGION.amazonaws.com";
-    document.getElementById("ep").textContent = API_BASE + "/latest";
+    // Point this at your deployed API Gateway endpoint (terraform output api_endpoint).
+    // No trailing slash — the routes are appended as "/produce", "/latest", "/query".
+    const API_BASE = "https://3xbw6f984c.execute-api.us-east-2.amazonaws.com";
+    const TICK_MS = 2000;
+
+    document.getElementById("ep").textContent = API_BASE;
+
+    // ── Live view + master switch ─────────────────────────────────────────────
+    let timer = null;
 
     function doorCell(status) {
       const cls = status === "open" ? "doors-open" : "doors-closed";
       return `<span class="${cls}">${status}</span>`;
     }
 
-    async function refresh() {
+    function renderLatest(engines) {
+      const rows = (engines || []).map(e => `<tr>
+        <td class="engine">${e.engine_id}</td><td>${e.speed_kmh}</td>
+        <td>${e.latitude}</td><td>${e.longitude}</td>
+        <td>${doorCell(e.door_status)}</td><td>${e.event_timestamp}</td></tr>`).join("");
+      document.getElementById("rows").innerHTML =
+        rows || '<tr><td colspan="6" class="muted">no rows yet — give Snowflake a few seconds</td></tr>';
+    }
+
+    async function produce() {
+      try { await fetch(API_BASE + "/produce", { method: "POST" }); }
+      catch (err) { console.error("produce failed", err); }
+    }
+
+    async function refreshLatest() {
       try {
         const res = await fetch(API_BASE + "/latest");
-        const engines = await res.json(); // [{engine_id, speed_kmh, latitude, longitude, door_status, timestamp}, ...]
-        const rows = engines.map(e => `<tr>
-          <td class="engine">${e.engine_id}</td><td>${e.speed_kmh}</td>
-          <td>${e.latitude}</td><td>${e.longitude}</td>
-          <td>${doorCell(e.door_status)}</td><td>${e.timestamp}</td></tr>`).join("");
-        document.getElementById("rows").innerHTML = rows || '<tr><td colspan="6" class="muted">no rows</td></tr>';
-      } catch (e) {
-        console.error(e);
+        renderLatest(await res.json());
+      } catch (err) { console.error("latest failed", err); }
+    }
+
+    // One tick = emit a round of telemetry, then refresh the view. Fired
+    // concurrently; the live view lags produce by Snowpipe Streaming's few seconds.
+    function tick() { produce(); refreshLatest(); }
+
+    function setRunning(on) {
+      document.getElementById("switch").checked = on;
+      const status = document.getElementById("status");
+      status.textContent = on ? "Engines running — telemetry flowing" : "Stopped";
+      status.className = "status " + (on ? "on" : "off");
+      if (on && !timer) { tick(); timer = setInterval(tick, TICK_MS); }
+      if (!on && timer) { clearInterval(timer); timer = null; }
+    }
+
+    document.getElementById("switch").addEventListener("change", e => setRunning(e.target.checked));
+
+    // ── Analytics ─────────────────────────────────────────────────────────────
+    const QUERIES = [
+      { name: "speed_leaderboard",     label: "Speed leaderboard" },
+      { name: "throughput_per_minute", label: "Throughput / min" },
+      { name: "doors_open_moving",     label: "Doors open while moving" },
+    ];
+
+    function renderTable(rows, label) {
+      if (!rows || !rows.length) return `<p class="muted">${label}: no rows yet.</p>`;
+      const cols = Object.keys(rows[0]);
+      const head = cols.map(c => `<th>${c}</th>`).join("");
+      const body = rows.map(r => `<tr>${cols.map(c => `<td>${r[c]}</td>`).join("")}</tr>`).join("");
+      return `<h3>${label}</h3><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+    }
+
+    async function runQuery(name, label) {
+      const out = document.getElementById("queryResult");
+      out.innerHTML = `<p class="muted">running ${label}…</p>`;
+      try {
+        const res = await fetch(API_BASE + "/query?name=" + encodeURIComponent(name));
+        const data = await res.json(); // { name, rows: [...] }
+        out.innerHTML = renderTable(data.rows, label);
+      } catch (err) {
+        console.error("query failed", err);
+        out.innerHTML = `<p class="muted">query failed — see the console.</p>`;
       }
     }
-    refresh();
-    setInterval(refresh, 3000);
-    // Next step: swap the table for a map (e.g. Leaflet) and plot latitude/longitude.
+
+    const buttons = document.getElementById("queryButtons");
+    for (const q of QUERIES) {
+      const b = document.createElement("button");
+      b.className = "btn";
+      b.textContent = q.label;
+      b.addEventListener("click", () => runQuery(q.name, q.label));
+      buttons.appendChild(b);
+    }
   </script>
 </body>
 </html>

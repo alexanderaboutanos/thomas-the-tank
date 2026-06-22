@@ -20,6 +20,9 @@ resource "aws_s3_object" "index" {
   source       = "${path.module}/../web/index.html"
   etag         = filemd5("${path.module}/../web/index.html")
   content_type = "text/html"
+  # Let CloudFront revalidate the page each load so a re-uploaded index.html (e.g.
+  # after wiring API_BASE) shows up without a manual invalidation.
+  cache_control = "no-cache"
 }
 
 # Hero image for the web UI. index.html references it as "thomas.png".

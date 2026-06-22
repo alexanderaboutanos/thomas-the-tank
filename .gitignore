@@ -16,6 +16,9 @@ rsa_key*
 .terraform/
 *.tfstate
 *.tfstate.*
+# Saved plan output — an ephemeral build artifact that can embed variable values.
+tfplan
+*.tfplan
 crash.log
 crash.*.log
 override.tf

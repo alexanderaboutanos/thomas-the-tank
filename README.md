@@ -15,6 +15,15 @@ A train-themed on/off switch in the UI drives a `produce` Lambda, so the whole d
 the cloud — no laptop needed. (Reading the live view from Snowflake is a deliberate
 simplification; the production-faithful version taps Kafka directly — see the reach goal.)
 
+## Live demo
+
+The step-7 serving layer is deployed in `us-east-2`:
+
+- **Web UI** — https://dhfibaytx3cxo.cloudfront.net
+- **API** — https://3xbw6f984c.execute-api.us-east-2.amazonaws.com — `POST /produce`, `GET /latest`, `GET /query?name=…`
+
+(URLs are environment-specific; re-deploying `/infra` prints fresh ones via `terraform output` `web_url` / `api_endpoint`.)
+
 ## Architecture
 
 ```mermaid
@@ -64,6 +73,7 @@ Build the unfamiliar foundation first; the AWS UI last. Each step is its own dir
     - **Web UI** — a train-themed **on/off master switch**: while on, the browser calls `/produce` on a ~2s interval and polls `/latest`; three **query buttons** call `/query`. Per-viewer — closing the tab stops production, so it scales to zero with no runaway cost on a public URL. (Theme/polish — map, lever switch, engine faces — is a later pass; wire the plumbing first.)
 - [ ] **8. Play** — evolve the schema (watch the Schema Registry compatibility check), watch consumer lag, reason about partitioning by `engine_id`. This is the fun part — tinker and see what breaks.
 - [ ] **9. Reach goal** (after everything else) — the "true push" live feed: read the live view **straight from Kafka** instead of Snowflake — a **persistent Kafka consumer** pushing to the browser over **WebSocket/SSE** (e.g. API Gateway WebSocket API + a small Fargate consumer). This is how the real system is wired (Kafka → UI for live; Snowflake for analytics) — lower-latency and more faithful, but it reintroduces an always-on process, hence a reach goal rather than the baseline. Optional extra: a Snowflake **Stream + TASK** maintaining a `TELEMETRY_LATEST` table to showcase CDC.
+- [ ] **10. Schematization — typed columns** (`/confluent`, `/snowflake`) — an enhancement to the step-6 connector; do it any time after step 6 (it pairs naturally with step 8's schema-evolution play). Step 6 deliberately left schematization **off**, so every message still lands in the `RECORD_CONTENT` VARIANT. Flip the managed connector's schematization **on** (verify the exact key against current Confluent docs — e.g. `snowflake.enable.schematization`, which needs a schema-based value converter) so the Sink reads the Avro schema and **auto-creates real typed columns** (`ENGINE_ID STRING`, `SPEED_KMH FLOAT`, …) — no VARIANT blob. The flatten-from-VARIANT views collapse to bare column refs: that seam is centralized in `TELEMETRY_FLAT` (`/snowflake/analytics.tf`), so it's a one-line change there and `TELEMETRY_LATEST` + the analytics views + the Lambda follow unchanged. Trade-off to own out loud: it **couples the Snowflake table to the Avro schema**, so a schema-evolution change (step 8) now shifts columns under you — which is exactly what makes it a good experiment to run alongside that step.
 
 > Tip: stand the Confluent + Snowflake resources up **by hand once** (console/CLI) to
 > learn what each piece is, *then* codify them into the Terraform here. Writing IaC for

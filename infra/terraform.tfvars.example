@@ -1,7 +1,10 @@
 # Copy to terraform.tfvars and fill in (kept out of git).
-region                = "us-east-1"
+# region MUST match the Confluent + Snowflake region used in ../confluent.
+region                = "us-east-2"
 name_prefix           = "sodor-railway"
 snowflake_secret_name = "sodor-railway/snowflake"
+confluent_secret_name = "sodor-railway/confluent"
+num_engines           = 5
 
 # Lock CORS down to the CloudFront URL once the distribution exists:
 # cors_allow_origins = ["https://dxxxxxxxxxxxxx.cloudfront.net"]

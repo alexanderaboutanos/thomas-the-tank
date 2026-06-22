@@ -1,4 +1,5 @@
-# Lambda that queries Snowflake and returns the latest telemetry as JSON.
+# Serving Lambda (container image): POST /produce -> Kafka, GET /latest &
+# GET /query -> Snowflake. Reads its two secrets from Secrets Manager.
 
 data "aws_iam_policy_document" "lambda_assume" {
   statement {
@@ -21,48 +22,44 @@ resource "aws_iam_role_policy_attachment" "lambda_logs" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
-# Read only the one Snowflake secret — least privilege (CDK's sfSecret.grantRead).
+# Read only the two secrets this function needs — least privilege.
 data "aws_iam_policy_document" "lambda_secret" {
   statement {
-    actions   = ["secretsmanager:GetSecretValue"]
-    resources = [data.aws_secretsmanager_secret.snowflake.arn]
+    actions = ["secretsmanager:GetSecretValue"]
+    resources = [
+      data.aws_secretsmanager_secret.snowflake.arn,
+      data.aws_secretsmanager_secret.confluent.arn,
+    ]
   }
 }
 
 resource "aws_iam_role_policy" "lambda_secret" {
-  name   = "read-snowflake-secret"
+  name   = "read-serving-secrets"
   role   = aws_iam_role.lambda.id
   policy = data.aws_iam_policy_document.lambda_secret.json
 }
 
-# Zip up lambda/. boto3 is in the runtime; see the TODO below for the
-# Snowflake connector, which is not.
-data "archive_file" "lambda" {
-  type        = "zip"
-  source_dir  = "${path.module}/lambda"
-  output_path = "${path.module}/build/lambda.zip"
-}
-
+# Container image (built + pushed by ecr.tf). No runtime/handler/filename here —
+# those come from the image's Dockerfile CMD. The function lives outside any VPC,
+# so it keeps default internet egress to Confluent Cloud (9092) and Snowflake.
 resource "aws_lambda_function" "api" {
-  function_name    = "${local.name_prefix}-latest"
-  role             = aws_iam_role.lambda.arn
-  runtime          = var.lambda_runtime
-  handler          = "handler.handler"
-  filename         = data.archive_file.lambda.output_path
-  source_code_hash = data.archive_file.lambda.output_base64sha256
-  timeout          = 30
-  memory_size      = 256
+  function_name = "${local.name_prefix}-serving"
+  role          = aws_iam_role.lambda.arn
+  package_type  = "Image"
+  image_uri     = local.serving_image_uri
+  architectures = ["x86_64"]
+  timeout       = 30
+  memory_size   = 512 # headroom for librdkafka + the Snowflake connector
 
   environment {
     variables = {
       SNOWFLAKE_SECRET_NAME = var.snowflake_secret_name
+      CONFLUENT_SECRET_NAME = var.confluent_secret_name
+      NUM_ENGINES           = tostring(var.num_engines)
     }
   }
 
-  # TODO: snowflake-connector-python isn't in the base runtime. Ship it via a
-  # Lambda layer or a container image, then implement the query in
-  # lambda/handler.py.
-  # layers = [aws_lambda_layer_version.snowflake.arn]
+  depends_on = [terraform_data.build_push]
 }
 
 resource "aws_cloudwatch_log_group" "lambda" {

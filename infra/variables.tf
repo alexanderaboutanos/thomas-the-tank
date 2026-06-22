@@ -10,14 +10,21 @@ variable "name_prefix" {
 }
 
 variable "snowflake_secret_name" {
-  description = "Name of the Secrets Manager secret holding Snowflake read creds."
+  description = "Secrets Manager secret holding Snowflake read creds (for /latest, /query)."
   type        = string
   default     = "sodor-railway/snowflake"
 }
 
-variable "lambda_runtime" {
-  type    = string
-  default = "python3.12"
+variable "confluent_secret_name" {
+  description = "Secrets Manager secret holding Confluent Kafka + Schema Registry creds (for /produce)."
+  type        = string
+  default     = "sodor-railway/confluent"
+}
+
+variable "num_engines" {
+  description = "How many engines /produce emits a reading for per tick (matches the producer)."
+  type        = number
+  default     = 5
 }
 
 variable "cors_allow_origins" {
