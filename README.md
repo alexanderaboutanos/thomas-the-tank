@@ -5,15 +5,23 @@
 A small train-IoT data pipeline — a hands-on exercise built for fun to get to grips with the
 Kafka, Confluent, and Snowflake stack, themed as the **North Western Railway** of the Island of Sodor.
 
-The simulated engines (Thomas, Edward, Henry, Gordon, James…) emit telemetry to
-**Confluent Cloud (Kafka)**, which the managed **Snowflake Sink Connector** lands in
-**Snowflake** via **Snowpipe Streaming** (near-real-time latency — measured ~3–30s; see step 6). The web UI reads
-everything from Snowflake through a Lambda — both the **live view** (latest row per engine,
-refreshed every couple of seconds) and **analytics** (aggregate query buttons).
+The simulated engines (Thomas, Edward, Henry, Gordon, James…) emit Avro telemetry to
+**Confluent Cloud (Kafka)**, keyed by `engine_id`. From there the data forks into the
+**production-faithful split** — two read paths, each on the store that fits it:
 
-A train-themed on/off switch in the UI drives a `produce` Lambda, so the whole demo runs in
-the cloud — no laptop needed. (Reading the live view from Snowflake is a deliberate
-simplification; the production-faithful version taps Kafka directly — see the reach goal.)
+- **Live view** — a small **always-on Fargate container** taps Kafka under its own consumer
+  group, holds a latest-per-engine map in memory, and streams each fresh reading to the browser
+  over **Server-Sent Events** (`/stream`) — straight off the topic, no warehouse in the path.
+- **Analytics** — the managed **Snowflake Sink Connector** lands the same events in **Snowflake**
+  via **Snowpipe Streaming** (~3–30s; see step 6), where canned aggregate queries (`/query`) roll
+  them up on demand.
+
+A train-themed on/off switch in the UI drives `POST /produce` on a ~2s tick, so the whole demo
+runs in the cloud — no laptop needed. Everything is served **same-origin**: **CloudFront** fronts
+the static page (**S3**) and proxies `/produce`, `/query`, and the `/stream` SSE to the Fargate
+container (behind an **ALB**) — no API keys, no CORS, no mixed content. (The earlier step-7 design
+read *both* views from Snowflake through a **Lambda + API Gateway**; step 9 retired that, moving
+the live path onto Kafka and folding the serving routes into the one container.)
 
 ## Live demo
 
@@ -23,16 +31,40 @@ The step-9 serving layer is deployed in `us-east-2`:
 
 (The URL is environment-specific; re-deploying `/infra` prints a fresh one via `terraform output web_url`.)
 
+## Architecture
+
+```mermaid
+flowchart LR
+    W["Browser<br/>S3 + CloudFront UI"]
+    subgraph SVC["Always-on Fargate container · FastAPI<br/>(behind ALB ← CloudFront, same-origin)"]
+      P["POST /produce"]
+      Q["GET /query"]
+      LV["live Kafka consumer<br/>→ GET /stream (SSE)"]
+    end
+    W -->|"switch on → per ~2s tick"| P
+    P -->|"Avro, keyed by engine_id"| K["Confluent Cloud<br/>Kafka + Schema Registry"]
+    K -->|"managed Sink Connector<br/>(Snowpipe Streaming)"| S["Snowflake<br/>(analytics)"]
+    K -->|"own consumer group<br/>latest-per-engine"| LV
+    LV -->|"live view (SSE)"| W
+    W -->|"GET /query?name=…"| Q
+    Q -->|SQL| S
+    S -->|rows| Q
+```
+
+Two read paths off one topic: the **live view** streams straight from Kafka (sub-second, SSE),
+while **analytics** reads Snowflake (rolled up from the same events via Snowpipe Streaming).
+
 ## Stack
 
-| Layer            | Tool                          | Managed in   |
-|------------------|-------------------------------|--------------|
-| Producer         | Python + `confluent-kafka` (local script + `produce` Lambda) | `/producer` (+ `/infra`) |
-| Stream           | Confluent Cloud (Kafka)       | `/confluent` (Terraform) |
-| Sink             | Confluent Snowflake Sink Connector (Snowpipe Streaming) | `/confluent` (Terraform) |
-| Warehouse        | Snowflake (live view + analytics) | `/snowflake` (Terraform) |
-| API + hosting    | AWS Lambda, API Gateway, S3, CloudFront | `/infra` (Terraform) |
-| UI               | Static HTML/JS                | `/web`       |
+| Layer             | Tool                          | Managed in   |
+|-------------------|-------------------------------|--------------|
+| Producer          | Python + `confluent-kafka` (local script + container `POST /produce`) | `/producer`, `/consumer` (+ `/infra`) |
+| Stream            | Confluent Cloud (Kafka)       | `/confluent` (Terraform) |
+| Live tap          | Always-on Fargate consumer (FastAPI + `confluent-kafka`) → SSE | `/consumer` (+ `/infra`) |
+| Sink              | Confluent Snowflake Sink Connector (Snowpipe Streaming) | `/confluent` (Terraform) |
+| Warehouse         | Snowflake (analytics)         | `/snowflake` (Terraform) |
+| Serving + hosting | ECS/Fargate + ALB, S3, CloudFront | `/infra` (Terraform) |
+| UI                | Static HTML/JS                | `/web`       |
 
 ## Tools needed
 
@@ -76,7 +108,7 @@ Build the unfamiliar foundation first; the AWS UI last. Each step is its own dir
 ## Secrets
 
 - `.gitignore` excludes `.env`, `*.tfvars`, `*.tfstate`, key files, and Terraform/build artifacts.
-- Put Snowflake creds the Lambda needs in **AWS Secrets Manager / SSM**, not in code.
+- Put the Snowflake creds the serving container needs in **AWS Secrets Manager / SSM**, not in code.
 - Each subdir has a `.env.example` / `terraform.tfvars.example` — copy, fill in, and keep the real one out of git.
 
 ## Theoretical Considerations
