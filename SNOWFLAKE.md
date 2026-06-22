@@ -42,24 +42,33 @@ Account
 
 *the fork, applied to **our** pipeline — generic tradeoffs are in the pros/cons below; here's how the connector actually lands a message.*
 
-### classic Snowpipe (what we're using)
+### classic Snowpipe (step 5 — how we started)
 
 - every message lands as **two VARIANT columns**:
   - `RECORD_CONTENT` - the parsed message value (the whole avro record, as a json-ish blob)
   - `RECORD_METADATA` - kafka bookkeeping (topic, partition, offset, timestamp)
 - the real fields (engine_id, speed, …) live *inside* `RECORD_CONTENT`. to get tidy columns you write a **view** (`TELEMETRY_LATEST`).
 - *mental model: the mail room dumps every letter in one bin; the view is your rule for reading the addresses off them.*
+- the catch: file-based, so the warehouse view lagged tens of seconds — too slow for a live on/off switch. that's what step 6 fixes.
 
-### Snowpipe Streaming + schematization (the upgrade, step 7)
+### Snowpipe Streaming (step 6 — what we're using now)
 
-- "schematization" = the connector reads the avro schema and **auto-creates real typed columns** (`ENGINE_ID STRING`, `SPEED_KMH FLOAT`, …). no VARIANT blob, no view needed.
-- cost: it **couples the snowflake table to the avro schema** — evolve the schema and the columns shift under you. more magic, more to reason about.
+- same connector, one config flip: `snowflake.ingestion.method = SNOWPIPE_STREAMING`. rows are written **straight into the table** via the streaming API — no files, no stage, no pipe-driven COPY.
+- grants shift with it: streaming uses no stage, so the connector role drops `CREATE STAGE` (least privilege). everything else it needs stays.
+- **landing shape is unchanged.** streaming still lands the same two VARIANT columns, so `TELEMETRY_LATEST` and the serving Lambda's query (step 7) are untouched. *the mail room got faster; the letters look the same.*
+- **but the freshness goal isn't fully met — step 6 is left open.** measured end-to-end: **~3s right after a flush, ~30s just before the next, avg ~15s.** much better than classic's minute+, but not the single-digit "live" target. the **fully-managed connector pins the streaming client-lag at its 30s default** and silently drops the knobs that would lower it (`snowflake.streaming.max.client.lag`, `enable.single.buffer` — they never land in Terraform state; `buffer.flush.time` is accepted but bypassed by the connector's locked single-buffer mode). true single-digit needs a self-managed connector or the step-9 direct-Kafka tap. *the warehouse path tops out at "near-real-time", not "live" — which is exactly why the faithful live path reads Kafka.*
 
-### why classic first
+### schematization — a separate knob we deliberately left OFF
+
+- "schematization" (`snowflake.enable.schematization = true`, default false) is **orthogonal to the ingestion method** — it works under classic Snowpipe too. it makes the connector read the avro schema and **auto-create real typed columns** (`ENGINE_ID STRING`, `SPEED_KMH FLOAT`, …): no VARIANT blob, no view needed.
+- cost: it **couples the snowflake table to the avro schema** — evolve the schema and the columns shift under you. more magic, more to reason about, and it would break the `TELEMETRY_LATEST` contract the step-7 serving layer reads.
+- so step 6 buys the latency win *without* taking on that coupling. flipping schematization on is a clean future experiment, not part of this step.
+
+### why classic first (the step 5 → 6 arc)
 
 - it's the default + the canonical "learn the connector" path.
 - the VARIANT→view pattern is a genuinely useful snowflake skill (querying semi-structured data).
-- best learning arc: get it flowing the simple way now, then switch to streaming in step 7 and *feel* the latency drop. that contrast is the lesson.
+- best learning arc: got it flowing the simple way in step 5, then switched to streaming in step 6 and *felt* the latency drop. that contrast is the lesson.
 
 ## Classic vs Streaming — pros & cons
 
@@ -116,10 +125,10 @@ Given this project is a Kafka/Confluent pipeline, **Snowpipe Streaming via the K
 
 ## Questions
 
-why is the warehouse view near-real-time, not sub-second?
+why was the warehouse view near-real-time under classic, not sub-second?
 
-- classic Snowpipe buffers messages into files and the pipe ingests on its own cadence. that buffering *is* the latency. it's a cost/throughput trade — fewer, bigger loads are cheaper than a constant trickle.
-- lower-latency options: Snowpipe Streaming (above), or tapping kafka directly with a websocket/SSE bridge (the step-8 reach goal).
+- classic Snowpipe (step 5) buffered messages into files and the pipe ingested on its own cadence. that buffering *was* the latency — a cost/throughput trade, fewer/bigger loads being cheaper than a constant trickle.
+- step 6 swapped that for Snowpipe Streaming (above), which appends rows directly and improves the view's freshness to ~3–30s (near-real-time). it stops short of single-digit because the managed connector caps the flush at ~30s. the remaining lower-latency option — genuinely sub-second — is tapping kafka directly with a websocket/SSE bridge (the step-9 reach goal), which skips the warehouse on the live path entirely.
 
 why key-pair auth instead of a password?
 

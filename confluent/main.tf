@@ -331,7 +331,10 @@ resource "confluent_role_binding" "app-connector-sr-read" {
 
 # ─── The managed Snowflake Sink connector ────────────────────────────────────
 
-# Reads sodor-telemetry (Avro) and lands it in Snowflake via classic Snowpipe.
+# Reads sodor-telemetry (Avro) and lands it in Snowflake via Snowpipe Streaming
+# (step 6) — rows are written straight into the table via the streaming API, no
+# file/stage/pipe COPY, so the warehouse view is near-real-time (measured ~3–30s;
+# the managed connector caps the flush at ~30s — see the buffer.flush.time note).
 # Snowflake-side values come from ../snowflake outputs; the private key is the
 # connector half of the key pair (body only, one line). See ../SNOWFLAKE.md.
 resource "confluent_connector" "snowflake_sink" {
@@ -347,20 +350,34 @@ resource "confluent_connector" "snowflake_sink" {
   }
 
   config_nonsensitive = {
-    "connector.class"            = "SnowflakeSink"
-    "name"                       = "sodor-snowflake-sink"
-    "kafka.auth.mode"            = "SERVICE_ACCOUNT"
-    "kafka.service.account.id"   = confluent_service_account.app-connector.id
-    "topics"                     = confluent_kafka_topic.telemetry.topic_name
-    "input.data.format"          = "AVRO"
-    "snowflake.ingestion.method" = "SNOWPIPE" # classic (default); SNOWPIPE_STREAMING is the step-7 upgrade
-    "snowflake.url.name"         = var.snowflake_url
-    "snowflake.user.name"        = var.snowflake_connector_user
-    "snowflake.role.name"        = var.snowflake_connector_role
-    "snowflake.database.name"    = var.snowflake_database
-    "snowflake.schema.name"      = var.snowflake_schema
-    "snowflake.topic2table.map"  = "${confluent_kafka_topic.telemetry.topic_name}:${var.snowflake_table}"
-    "tasks.max"                  = "1"
+    "connector.class"          = "SnowflakeSink"
+    "name"                     = "sodor-snowflake-sink"
+    "kafka.auth.mode"          = "SERVICE_ACCOUNT"
+    "kafka.service.account.id" = confluent_service_account.app-connector.id
+    "topics"                   = confluent_kafka_topic.telemetry.topic_name
+    "input.data.format"        = "AVRO"
+    # Step 6: streaming ingest (was "SNOWPIPE"). Schematization is left OFF (default
+    # FALSE), so data still lands as the two VARIANT columns RECORD_CONTENT +
+    # RECORD_METADATA — TELEMETRY_LATEST in ../snowflake is unchanged.
+    "snowflake.ingestion.method" = "SNOWPIPE_STREAMING"
+    # Freshness lever — and a documented ceiling. buffer.flush.time is the connector's
+    # internal-buffer flush interval (min 1s for streaming, 10s for classic); we ask
+    # for 5s. BUT measured cadence stays ~30s: the managed connector runs Snowpipe
+    # Streaming in single-buffer mode (the connector buffer is bypassed, so this knob
+    # has no observed effect) and pins the streaming client-lag at its 30s default.
+    # The two knobs that WOULD lower it — "snowflake.streaming.max.client.lag" and
+    # "snowflake.streaming.enable.single.buffer" — are silently dropped by the managed
+    # connector (they never land in state; setting them only causes a perpetual diff).
+    # Net: freshness oscillates ~3s (just after a flush) to ~30s (just before the next).
+    # True single-digit needs a self-managed connector or the step-9 direct-Kafka tap.
+    "buffer.flush.time"         = "5"
+    "snowflake.url.name"        = var.snowflake_url
+    "snowflake.user.name"       = var.snowflake_connector_user
+    "snowflake.role.name"       = var.snowflake_connector_role
+    "snowflake.database.name"   = var.snowflake_database
+    "snowflake.schema.name"     = var.snowflake_schema
+    "snowflake.topic2table.map" = "${confluent_kafka_topic.telemetry.topic_name}:${var.snowflake_table}"
+    "tasks.max"                 = "1"
   }
 
   # ACLs + the SR binding must land before the connector starts consuming.

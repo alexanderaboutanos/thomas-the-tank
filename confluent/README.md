@@ -23,8 +23,13 @@ the existing one instead of recreating it.
 ## Snowflake Sink connector
 
 The fully-managed `SnowflakeSink` connector consumes `sodor-telemetry` (Avro) and
-lands it in Snowflake via **classic Snowpipe** (`snowflake.ingestion.method =
-SNOWPIPE`). It authenticates to Kafka as its own service account
+lands it in Snowflake via **Snowpipe Streaming** (`snowflake.ingestion.method =
+SNOWPIPE_STREAMING`, step 6 — was classic `SNOWPIPE` in step 5). Streaming appends
+rows directly, improving the warehouse view's freshness to near-real-time
+(measured ~3–30s — the managed connector caps the streaming flush at ~30s, so the
+single-digit goal isn't met; see the connector's `buffer.flush.time` note in
+`main.tf`). Schematization is left off, so the landing shape (the two VARIANT
+columns) is unchanged. It authenticates to Kafka as its own service account
 (`sodor-app-connector`) and to Snowflake with the key-pair user created in
 `../snowflake`. Being a consumer, it gets the minimal sink ACLs: cluster
 `DESCRIBE`, topic `READ`, consumer-group `READ` (`connect-lcc-` prefix), and

@@ -11,14 +11,23 @@ connector itself lives in `/confluent`; this layer just prepares the warehouse
 and emits the values that configure it. See `../SNOWFLAKE.md` for the concepts
 (warehouse vs storage, VARIANT, the two ingestion methods).
 
-## Ingestion mode: classic Snowpipe
+## Ingestion mode: Snowpipe Streaming (step 6)
 
-The connector batches messages into files and a Snowpipe pipe loads them, landing
-every message as **two VARIANT columns** — `RECORD_CONTENT` (the Avro value) and
-`RECORD_METADATA` (Kafka topic/partition/offset/timestamp). The typed fields live
-*inside* `RECORD_CONTENT`; `TELEMETRY_LATEST` flattens them into tidy columns and
-keeps the newest row per engine. (Snowpipe Streaming + schematization — typed
-columns, lower latency — is the step-7 upgrade. See `../SNOWFLAKE.md`.)
+The connector appends rows **directly** into the table via the Snowpipe Streaming
+API — no files, no stage, no pipe-driven COPY — so the warehouse view is
+near-real-time (measured ~3–30s; the fully-managed connector caps the streaming
+flush at ~30s, so the single-digit goal isn't met — see `../confluent`). With
+schematization off (the default), every message
+still lands as **two VARIANT columns** — `RECORD_CONTENT` (the Avro value) and
+`RECORD_METADATA` (Kafka topic/partition/offset/timestamp), identical to the
+classic shape it replaced (step 5). The typed fields live *inside* `RECORD_CONTENT`;
+`TELEMETRY_LATEST` flattens them into tidy columns and keeps the newest row per
+engine. (Schematization — auto-created typed columns — is a separate toggle left
+off here; it would couple the table to the Avro schema. See `../SNOWFLAKE.md`.)
+
+Grants reflect the switch: the connector role no longer needs `CREATE STAGE`
+(streaming uses no stage). It keeps `USAGE`, `CREATE TABLE`, `CREATE PIPE` on the
+schema and `INSERT`/`SELECT` on the table.
 
 ## Key pairs
 
@@ -99,8 +108,11 @@ SELECT COUNT(*) FROM SODOR_RAILWAY.TELEMETRY.TELEMETRY_RAW;          -- raw VARI
 SELECT * FROM SODOR_RAILWAY.TELEMETRY.TELEMETRY_LATEST;              -- typed, latest per engine
 ```
 
-Give it up to a minute — classic Snowpipe batches, so it's near-real-time, not
-instant.
+With Snowpipe Streaming (step 6) rows land in ~3–30s (the managed connector flushes
+on a ~30s cadence) — re-query a few seconds after producing, and again ~30s later to
+see the next batch. (Under the old classic Snowpipe it took up to a minute, so this
+is a clear improvement, just not yet single-digit — that gap is left open; see the
+root README step 6.)
 
 ## Gotchas
 

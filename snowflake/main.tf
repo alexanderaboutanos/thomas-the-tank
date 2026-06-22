@@ -2,8 +2,10 @@
 #
 # This layer stands up everything the managed Snowflake Sink connector needs to
 # land telemetry: the warehouse (compute), the SODOR_RAILWAY.TELEMETRY namespace,
-# the classic-Snowpipe landing table, a flattening view, and a least-privilege
-# key-pair service user/role for the connector to authenticate as.
+# the two-VARIANT landing table, a flattening view, and a least-privilege key-pair
+# service user/role for the connector to authenticate as. (Step 6 switched ingest
+# from classic Snowpipe to Snowpipe Streaming; with schematization off the table
+# shape is identical, so only the connector's grants changed — see below.)
 #
 # It is a SEPARATE root module from /confluent (separate state). Values cross the
 # boundary by hand, the same way producer/.env is filled from /confluent outputs:
@@ -41,9 +43,9 @@ provider "snowflake" {
 
 # The warehouse is COMPUTE, not storage — the engine that runs queries. Storage
 # (the tables) is billed separately; decoupling the two is the core OLAP trick.
-# XSMALL + a short auto-suspend keeps the trial cheap. (Classic Snowpipe ingest
-# uses Snowflake-managed serverless compute, not this warehouse, but the Lambda
-# and any ad-hoc queries will use it.)
+# XSMALL + a short auto-suspend keeps the trial cheap. (Snowpipe ingest — classic
+# or streaming — uses Snowflake-managed serverless compute, not this warehouse, but
+# the Lambda and any ad-hoc queries will use it.)
 resource "snowflake_warehouse" "sodor" {
   name           = var.warehouse_name
   warehouse_size = "XSMALL"
@@ -64,16 +66,17 @@ resource "snowflake_schema" "telemetry" {
 
 # ─── Landing table + flattening view ─────────────────────────────────────────
 
-# Classic Snowpipe lands every Kafka message as two VARIANT columns: the parsed
-# value in RECORD_CONTENT, Kafka bookkeeping (topic/partition/offset/ts) in
-# RECORD_METADATA. The connector would auto-create this table, but we codify it
-# so the shape is explicit and the view below has something to depend on. The
-# typed fields live INSIDE RECORD_CONTENT — see telemetry_latest.
+# With schematization off, the connector lands every Kafka message as two VARIANT
+# columns — the parsed value in RECORD_CONTENT, Kafka bookkeeping
+# (topic/partition/offset/ts) in RECORD_METADATA — under BOTH classic Snowpipe and
+# Snowpipe Streaming. The connector would auto-create this table, but we codify it
+# so the shape is explicit and the view below has something to depend on. The typed
+# fields live INSIDE RECORD_CONTENT — see telemetry_latest.
 resource "snowflake_table" "telemetry_raw" {
   database = snowflake_database.sodor.name
   schema   = snowflake_schema.telemetry.name
   name     = var.table_name
-  comment  = "Classic-Snowpipe landing table; typed fields live inside RECORD_CONTENT."
+  comment  = "Two-VARIANT landing table (Snowpipe Streaming, schematization off); typed fields live inside RECORD_CONTENT."
 
   column {
     name = "RECORD_METADATA"
@@ -86,7 +89,7 @@ resource "snowflake_table" "telemetry_raw" {
 }
 
 # A view that pulls the typed fields out of the RECORD_CONTENT blob and keeps the
-# newest reading per engine — this is what the serving Lambda (step 6) queries.
+# newest reading per engine — this is what the serving Lambda (step 7) queries.
 # The timestamp is ISO-8601, which sorts lexicographically = chronologically, so
 # ordering on the string is correct.
 resource "snowflake_view" "telemetry_latest" {
@@ -143,18 +146,24 @@ resource "snowflake_grant_privileges_to_account_role" "connector_wh_usage" {
   }
 }
 
-# Schema-level: USAGE to enter the schema, plus the object-creation rights
-# Snowpipe needs to build its own stage + pipe (and recreate the table if dropped).
+# Schema-level: USAGE to enter the schema, plus the object-creation rights the
+# connector needs. Step 6 (Snowpipe Streaming) writes rows straight to the table
+# via the streaming API — no files, no stage — so CREATE STAGE was dropped. We keep
+# CREATE PIPE: the classic/managed Kafka connector's streaming mode still provisions
+# a per-table pipe (it tracks committed offsets via the pipe's offset token), and
+# the docs don't confirm it's droppable, so least-privilege stops here. CREATE TABLE
+# lets the connector recreate the landing table if it's ever dropped.
 resource "snowflake_grant_privileges_to_account_role" "connector_schema" {
-  privileges        = ["USAGE", "CREATE TABLE", "CREATE STAGE", "CREATE PIPE"]
+  privileges        = ["USAGE", "CREATE TABLE", "CREATE PIPE"]
   account_role_name = snowflake_account_role.connector.name
   on_schema {
     schema_name = "\"${snowflake_database.sodor.name}\".\"${snowflake_schema.telemetry.name}\""
   }
 }
 
-# Table-level: the pipe (owned by this role) COPYs into the table, so it needs
-# INSERT; SELECT lets the connector check what it has already loaded.
+# Table-level: the connector inserts rows into the table, so it needs INSERT;
+# SELECT lets it read back what it has already committed (kept conservatively —
+# streaming tracks offsets via channel/pipe tokens rather than table reads).
 resource "snowflake_grant_privileges_to_account_role" "connector_table" {
   privileges        = ["INSERT", "SELECT"]
   account_role_name = snowflake_account_role.connector.name
