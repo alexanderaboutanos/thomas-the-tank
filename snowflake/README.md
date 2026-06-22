@@ -8,7 +8,7 @@ Snowflake Sink connector to authenticate as.
 
 This is a **separate root module** from `/confluent` (separate state). The
 connector itself lives in `/confluent`; this layer just prepares the warehouse
-and emits the values that configure it. See `../SNOWFLAKE.md` for the concepts
+and emits the values that configure it. See `../notes/SNOWFLAKE.md` for the concepts
 (warehouse vs storage, VARIANT, the two ingestion methods).
 
 ## Ingestion mode: Snowpipe Streaming (step 6)
@@ -23,7 +23,7 @@ still lands as **two VARIANT columns** — `RECORD_CONTENT` (the Avro value) and
 classic shape it replaced (step 5). The typed fields live *inside* `RECORD_CONTENT`;
 `TELEMETRY_LATEST` flattens them into tidy columns and keeps the newest row per
 engine. (Schematization — auto-created typed columns — is a separate toggle left
-off here; it would couple the table to the Avro schema. See `../SNOWFLAKE.md`.)
+off here; it would couple the table to the Avro schema. See `../notes/SNOWFLAKE.md`.)
 
 Grants reflect the switch: the connector role no longer needs `CREATE STAGE`
 (streaming uses no stage). It keeps `USAGE`, `CREATE TABLE`, `CREATE PIPE` on the

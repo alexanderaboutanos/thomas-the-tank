@@ -336,7 +336,7 @@ resource "confluent_role_binding" "app-connector-sr-read" {
 # file/stage/pipe COPY, so the warehouse view is near-real-time (measured ~3–30s;
 # the managed connector caps the flush at ~30s — see the buffer.flush.time note).
 # Snowflake-side values come from ../snowflake outputs; the private key is the
-# connector half of the key pair (body only, one line). See ../SNOWFLAKE.md.
+# connector half of the key pair (body only, one line). See ../notes/SNOWFLAKE.md.
 resource "confluent_connector" "snowflake_sink" {
   environment {
     id = confluent_environment.sodor.id

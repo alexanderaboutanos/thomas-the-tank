@@ -45,7 +45,7 @@ snowflake_private_key   # body of ../snowflake/rsa_key_connector.p8, one line
 ```
 
 The concepts (Snowpipe, VARIANT, the two ingestion methods) live in
-`../SNOWFLAKE.md`.
+`../notes/SNOWFLAKE.md`.
 
 ## Stand it up
 
