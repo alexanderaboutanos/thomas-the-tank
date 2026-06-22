@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>%F0%9F%9A%82</text></svg>" />
   <title>North Western Railway — Live Engine Telemetry</title>
   <style>
     :root {
@@ -32,20 +33,10 @@
       max-width: 960px;
       margin: 0 auto;
       padding: 1.5rem 1.25rem 0;
-    }
-    .badge {
-      display: inline-block;
-      font-size: .72rem;
-      letter-spacing: .18em;
-      text-transform: uppercase;
-      background: var(--nwr-red);
-      color: #fff;
-      padding: .25rem .6rem;
-      border-radius: 2px;
-      font-weight: 700;
+      text-align: center;
     }
     h1 {
-      margin: .6rem 0 .2rem;
+      margin: .2rem 0;
       font-size: 2rem;
       line-height: 1.1;
     }
@@ -58,12 +49,6 @@
       box-shadow: 0 -2px 0 var(--nwr-gold) inset;
     }
     main { max-width: 960px; margin: 0 auto; padding: 1.5rem 1.25rem 3rem; }
-    .meta {
-      color: #5c6675;
-      font-size: .85rem;
-      margin: 0 0 1rem;
-    }
-    .meta code { background: #fff; padding: .1rem .35rem; border-radius: 3px; border: 1px solid #ddd; }
     .panel {
       background: #fff;
       border: 1px solid #e2ddcf;
@@ -81,29 +66,144 @@
       background: #faf8f1;
       border-bottom: 1px solid #eee;
       color: var(--nwr-blue-dark);
+      display: flex; align-items: center; justify-content: space-between; gap: .5rem;
     }
     .panel .body { padding: 1rem; }
 
-    /* Master on/off lever switch */
-    .control { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
-    .switch { position: relative; display: inline-block; width: 78px; height: 38px; flex: none; }
-    .switch input { opacity: 0; width: 0; height: 0; }
-    .slider {
-      position: absolute; cursor: pointer; inset: 0;
-      background: #b9202f; border-radius: 38px; transition: .25s;
-      box-shadow: inset 0 2px 4px rgba(0,0,0,.3);
+    /* Live-tap link badge in the live-view header: the view's freshness now rides
+       on the SSE connection, so surface its state. */
+    .stream-status {
+      font-size: .62rem; font-weight: 700; letter-spacing: .06em; text-transform: none;
+      padding: .12rem .55rem; border-radius: 999px;
+      display: inline-flex; align-items: center; gap: .4rem;
     }
-    .slider::before {
-      content: ""; position: absolute; height: 30px; width: 30px; left: 4px; bottom: 4px;
-      background: #fff; border-radius: 50%; transition: .25s;
-      box-shadow: 0 2px 3px rgba(0,0,0,.4);
+    .stream-status::before {
+      content: ""; width: .5rem; height: .5rem; border-radius: 50%; background: currentColor;
     }
-    .switch input:checked + .slider { background: var(--green); }
-    .switch input:checked + .slider::before { transform: translateX(40px); }
-    .status { font-weight: 700; }
+    .stream-status.on  { color: var(--green);  background: rgba(46,125,50,.12); }
+    .stream-status.off { color: var(--nwr-red); background: rgba(200,16,46,.12); }
+    .stream-status.on::before { animation: live-pulse 1.6s ease-in-out infinite; }
+    @keyframes live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+
+    /* A row briefly highlights when its engine pushes a fresh reading over SSE. */
+    .flash { animation: flash .7s ease-out; }
+    @keyframes flash { from { background: #fff7df; } to { background: transparent; } }
+
+    /* ── Cab control console ─────────────────────────────────────────────── */
+    .console {
+      background-repeat: no-repeat;
+      background-image:
+        radial-gradient(circle at center, #6f6c63 0 2.5px, #b8b5a9 3px 4px, transparent 5px),
+        radial-gradient(circle at center, #6f6c63 0 2.5px, #b8b5a9 3px 4px, transparent 5px),
+        radial-gradient(circle at center, #6f6c63 0 2.5px, #b8b5a9 3px 4px, transparent 5px),
+        radial-gradient(circle at center, #6f6c63 0 2.5px, #b8b5a9 3px 4px, transparent 5px),
+        linear-gradient(180deg, #d6d3c7, #bfbcb0);
+      background-position: 11px 11px, right 11px top 11px, left 11px bottom 11px, right 11px bottom 11px, 0 0;
+      background-size: 12px 12px, 12px 12px, 12px 12px, 12px 12px, auto;
+      border: 1px solid #8d8a7f; border-radius: 10px; padding: 1.4rem 1.6rem;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.5), inset 0 -2px 6px rgba(0,0,0,.15);
+    }
+    .console-deck { display: flex; align-items: center; justify-content: center; gap: 2.4rem; flex-wrap: wrap; }
+    .cap { font-size: .6rem; font-weight: 700; letter-spacing: .08em; color: #3a3d42; text-transform: uppercase; }
+    .instrument { display: flex; flex-direction: column; align-items: center; gap: .5rem; }
+
+    /* radar scope */
+    .radar {
+      width: 124px; height: 124px; border-radius: 50%; position: relative; overflow: hidden;
+      background: radial-gradient(circle, #0c3318 0%, #06180c 70%, #020a05 100%);
+      border: 4px solid #2a2c2f;
+      box-shadow: inset 0 0 18px rgba(0,0,0,.85), 0 2px 6px rgba(0,0,0,.4);
+    }
+    .radar::before {  /* range rings + crosshairs */
+      content: ""; position: absolute; inset: 0; border-radius: 50%;
+      background:
+        repeating-radial-gradient(circle, transparent 0 19px, rgba(72,255,140,.18) 19px 20px),
+        linear-gradient(rgba(72,255,140,.16), rgba(72,255,140,.16)) center / 100% 1px no-repeat,
+        linear-gradient(rgba(72,255,140,.16), rgba(72,255,140,.16)) center / 1px 100% no-repeat;
+    }
+    .radar::after {  /* sweeping beam */
+      content: ""; position: absolute; inset: 0; border-radius: 50%;
+      background: conic-gradient(from 0deg, rgba(72,255,140,.55), rgba(72,255,140,0) 70deg, transparent 360deg);
+      animation: radar-sweep 3.2s linear infinite;
+    }
+    @keyframes radar-sweep { to { transform: rotate(360deg); } }
+    .blip {
+      position: absolute; width: 6px; height: 6px; border-radius: 50%;
+      background: #5cff8a; box-shadow: 0 0 7px #39ff78; animation: blip-pulse 3.2s ease-in-out infinite;
+    }
+    @keyframes blip-pulse { 0%, 100% { opacity: .2; } 45% { opacity: 1; } }
+
+    /* old analog clock */
+    .clock {
+      width: 124px; height: 124px; border-radius: 50%; position: relative;
+      background: radial-gradient(circle at 50% 38%, #faf6e9, #e7e0c9 80%);
+      border: 6px solid #2a2c2f;
+      box-shadow: inset 0 0 10px rgba(0,0,0,.2), 0 2px 6px rgba(0,0,0,.4);
+    }
+    .clock::before {  /* hour tick ring */
+      content: ""; position: absolute; inset: 4px; border-radius: 50%;
+      background: repeating-conic-gradient(from 0deg, #3a3d42 0deg 1.5deg, transparent 1.5deg 30deg);
+      -webkit-mask: radial-gradient(circle, transparent 0 42px, #000 43px);
+              mask: radial-gradient(circle, transparent 0 42px, #000 43px);
+    }
+    .hand { position: absolute; left: 50%; bottom: 50%; transform-origin: 50% 100%; border-radius: 3px; background: #2a2c2f; }
+    .hand.hour   { width: 5px; height: 30px; margin-left: -2.5px; }
+    .hand.minute { width: 3px; height: 42px; margin-left: -1.5px; }
+    .hand.second { width: 2px; height: 46px; margin-left: -1px; background: #c8102e; }
+    .clock .hub { position: absolute; left: 50%; top: 50%; width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%; background: #2a2c2f; z-index: 3; }
+
+    /* centered lever stack — fixed width so the status text can't widen the
+       column and shove the radar/clock outward when it changes length */
+    .lever-stack { display: flex; flex-direction: column; align-items: center; gap: .7rem; width: 190px; }
+    .lever { position: relative; width: 150px; height: 140px; flex: none; user-select: none; }
+    .lever input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; z-index: 5; }
+    /* mounting plate */
+    .lever-plate {
+      position: absolute; left: 8px; right: 8px; bottom: 0; height: 28px;
+      background: linear-gradient(180deg, #2a2d31, #141517);
+      border-radius: 6px;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.08), 0 3px 6px rgba(0,0,0,.35);
+    }
+    /* cast-iron quadrant */
+    .lever-quadrant {
+      position: absolute; left: 50%; bottom: 24px; width: 96px; height: 48px; margin-left: -48px;
+      background: radial-gradient(circle at 50% 100%, #3a3d42 0 18%, #202225 42%, #15161a 78%);
+      border-radius: 48px 48px 0 0;
+      box-shadow: inset 0 2px 3px rgba(255,255,255,.08), inset 0 -2px 6px rgba(0,0,0,.5);
+    }
+    .lever-quadrant::before {
+      content: ""; position: absolute; left: 50%; bottom: 0; width: 64px; height: 32px; margin-left: -32px;
+      border: 2px solid rgba(0,0,0,.4); border-bottom: none; border-radius: 32px 32px 0 0;
+    }
+    /* chrome lever arm */
+    .lever-arm {
+      position: absolute; left: 50%; bottom: 37px; width: 11px; height: 86px; margin-left: -5.5px;
+      transform-origin: 50% 100%; transform: rotate(-34deg);
+      transition: transform .4s cubic-bezier(.34,1.56,.5,1);
+      background: linear-gradient(90deg, #6f7378 0%, #e9edf0 38%, #ffffff 50%, #b9bec4 68%, #6a6e73 100%);
+      border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,.4);
+    }
+    .lever input:checked ~ .lever-arm { transform: rotate(30deg); }  /* thrown forward = running */
+    /* ball knob */
+    .lever-knob {
+      position: absolute; top: -16px; left: 50%; width: 32px; height: 32px; margin-left: -16px;
+      border-radius: 50%;
+      background: radial-gradient(circle at 35% 30%, #6b6e72, #1b1c1e 70%);
+      box-shadow: 0 3px 5px rgba(0,0,0,.4), inset 0 -2px 4px rgba(0,0,0,.5), inset 0 2px 3px rgba(255,255,255,.15);
+    }
+    /* brass pivot bolt */
+    .lever-pivot {
+      position: absolute; left: 50%; bottom: 37px; width: 24px; height: 24px;
+      margin-left: -12px; margin-bottom: -12px; border-radius: 50%; z-index: 4;
+      background: radial-gradient(circle at 35% 30%, #f4dd87, #b58f1f 60%, #7c5e12 100%);
+      box-shadow: 0 1px 2px rgba(0,0,0,.5), inset 0 1px 1px rgba(255,255,255,.5);
+    }
+    .status {
+      font-weight: 700; text-align: center; line-height: 1.3;
+      min-height: 2.6em; display: flex; align-items: center; justify-content: center;
+    }
     .status.on  { color: var(--green); }
     .status.off { color: var(--nwr-red); }
-    .hint { color: #98a0ac; font-size: .82rem; margin: .5rem 0 0; }
 
     table { border-collapse: collapse; width: 100%; }
     thead th {
@@ -123,7 +223,10 @@
     .doors-closed { color: var(--green); font-weight: 600; }
     .muted { color: #98a0ac; font-size: .85rem; }
 
-    .buttons { display: flex; gap: .6rem; flex-wrap: wrap; margin-bottom: 1rem; }
+    .query-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 2rem; margin-bottom: 1.2rem; }
+    .query-card { display: flex; flex-direction: column; gap: .4rem; }
+    .query-card .btn { width: 100%; }
+    .query-desc { font-size: .78rem; color: #6b7280; line-height: 1.4; }
     .btn {
       font: inherit; font-weight: 600; cursor: pointer;
       background: var(--nwr-blue); color: #fff; border: 0;
@@ -133,121 +236,262 @@
     .btn:hover { background: var(--nwr-blue-dark); }
     .btn:active { transform: translateY(1px); box-shadow: none; }
     #queryResult h3 { margin: .2rem 0 .6rem; color: var(--nwr-blue-dark); font-size: 1rem; }
-    footer { text-align: center; color: #98a0ac; font-size: .8rem; padding-bottom: 2rem; }
+
+    /* ── Tabs (under the master regulator) ───────────────────────────────────── */
+    .tabs { display: flex; gap: .35rem; margin-bottom: 1.5rem; border-bottom: 2px solid #e2ddcf; }
+    .tab {
+      font: inherit; font-weight: 700; cursor: pointer; border: 0; background: transparent;
+      color: var(--nwr-blue-dark); padding: .7rem 1.15rem; border-radius: 8px 8px 0 0;
+      letter-spacing: .03em; opacity: .55; border-bottom: 3px solid transparent; margin-bottom: -2px;
+      transition: opacity .15s, background .15s;
+    }
+    .tab:hover { opacity: .85; background: #faf8f1; }
+    .tab[aria-selected="true"] {
+      opacity: 1; background: #fff; border-bottom-color: var(--nwr-gold);
+      box-shadow: 0 -2px 8px rgba(21,55,95,.06);
+    }
+    .tabpanel[hidden] { display: none; }
+
+    /* About copy */
+    .about p { margin: 0 0 1rem; line-height: 1.55; }
+    .about p:last-child { margin-bottom: 0; }
+    .about ul { margin: 0 0 1rem; padding-left: 1.2rem; line-height: 1.6; }
+    .about code { background: #faf8f1; padding: .1rem .35rem; border-radius: 3px; border: 1px solid #eee; font-size: .9em; }
+
+    /* Footer icon links */
+    footer { padding: 0; }
+    .footer-links { display: flex; justify-content: center; align-items: center; gap: 1.4rem; padding: 1.5rem 0 2.75rem; }
+    .footer-links a { color: #6b7280; display: inline-flex; transition: color .15s, transform .15s; }
+    .footer-links a:hover { color: var(--nwr-blue); transform: translateY(-2px); }
+    .footer-links svg { width: 26px; height: 26px; fill: currentColor; display: block; }
   </style>
 </head>
 <body>
   <header>
     <div class="hero">
-      <span class="badge">Sodor &bull; Live</span>
-      <h1>North Western Railway — Engine Telemetry</h1>
+      <h1>Engine Telemetry Monitor HUD</h1>
       <p class="tagline">Really useful engines, reporting in from the Island of Sodor.</p>
       <img src="thomas.png" alt="Thomas the Tank Engine emerging from a tunnel" />
     </div>
   </header>
 
   <main>
-    <p class="meta">Serving API: <code id="ep"></code>. Set <code>API_BASE</code> in the source.</p>
-
-    <!-- Master switch: drives /produce and polls /latest while on -->
+    <!-- Master switch: drives /produce while on. The live view below is fed by a
+         standing SSE connection, independent of this lever. -->
     <div class="panel">
-      <h2>Master switch</h2>
+      <h2>Master regulator</h2>
       <div class="body">
-        <div class="control">
-          <label class="switch">
-            <input type="checkbox" id="switch" />
-            <span class="slider"></span>
-          </label>
-          <span class="status off" id="status">Stopped</span>
+        <div class="console">
+          <div class="console-deck">
+
+            <!-- radar scope (decorative) -->
+            <div class="instrument">
+              <div class="radar">
+                <span class="blip" style="left:38%; top:30%"></span>
+                <span class="blip" style="left:60%; top:58%"></span>
+              </div>
+              <span class="cap">Radar</span>
+            </div>
+
+            <!-- the one real control: master regulator lever -->
+            <div class="lever-stack">
+              <label class="lever" title="Pull the lever to start the engines">
+                <input type="checkbox" id="switch" />
+                <span class="lever-plate"></span>
+                <span class="lever-quadrant"></span>
+                <span class="lever-arm"><span class="lever-knob"></span></span>
+                <span class="lever-pivot"></span>
+              </label>
+              <span class="status off" id="status">All trains stopped</span>
+            </div>
+
+            <!-- old analog clock (live, decorative) -->
+            <div class="instrument">
+              <div class="clock">
+                <span class="hand hour" id="clkHour"></span>
+                <span class="hand minute" id="clkMin"></span>
+                <span class="hand second" id="clkSec"></span>
+                <span class="hub"></span>
+              </div>
+              <span class="cap">Sodor Time</span>
+            </div>
+
+          </div>
         </div>
-        <p class="hint">
-          While on, your browser calls <code>POST /produce</code> every 2s and polls
-          <code>GET /latest</code>. It runs per-viewer — close the tab and production stops,
-          so a public URL scales to zero.
-        </p>
       </div>
     </div>
 
-    <!-- Live view: latest row per engine from Snowflake -->
-    <div class="panel">
-      <h2>Live view — latest per engine</h2>
-      <table>
-        <thead>
-          <tr><th>Engine</th><th>Speed (km/h)</th><th>Lat</th><th>Lon</th><th>Doors</th><th>Last seen (UTC)</th></tr>
-        </thead>
-        <tbody id="rows"><tr><td colspan="6" class="muted">flip the switch to wake the engines…</td></tr></tbody>
-      </table>
+    <!-- Tabs: switch the content below the master regulator -->
+    <div class="tabs" role="tablist" aria-label="Sections">
+      <button class="tab" role="tab" id="tabbtn-live" aria-controls="tab-live" aria-selected="true" data-tab="live">Live view</button>
+      <button class="tab" role="tab" id="tabbtn-analytics" aria-controls="tab-analytics" aria-selected="false" data-tab="analytics">Analytics</button>
+      <button class="tab" role="tab" id="tabbtn-about" aria-controls="tab-about" aria-selected="false" data-tab="about">About</button>
     </div>
+
+    <!-- Live view: latest reading per engine, streamed straight from Kafka over SSE -->
+    <section class="tabpanel" id="tab-live" role="tabpanel" aria-labelledby="tabbtn-live">
+      <div class="panel">
+        <h2>Live view — latest per engine <span class="stream-status off" id="streamStatus">connecting…</span></h2>
+        <table>
+          <thead>
+            <tr><th>Engine</th><th>Speed (km/h)</th><th>Lat</th><th>Lon</th><th>Doors</th><th>Last seen (UTC)</th></tr>
+          </thead>
+          <tbody id="rows"><tr><td colspan="6" class="muted">connecting to the live tap…</td></tr></tbody>
+        </table>
+      </div>
+    </section>
 
     <!-- Analytics: canned, server-side queries -->
-    <div class="panel">
-      <h2>Analytics</h2>
-      <div class="body">
-        <div class="buttons" id="queryButtons"></div>
-        <div id="queryResult"><p class="muted">pick a query above.</p></div>
+    <section class="tabpanel" id="tab-analytics" role="tabpanel" aria-labelledby="tabbtn-analytics" hidden>
+      <div class="panel">
+        <h2>Analytics</h2>
+        <div class="body">
+          <div class="query-grid" id="queryButtons"></div>
+          <div id="queryResult"><p class="muted">pick a query above.</p></div>
+        </div>
       </div>
-    </div>
+    </section>
 
-    <footer>Confluent Cloud → Snowflake → Lambda → this page. Toot toot!</footer>
+    <!-- About: what this is and how the data gets here -->
+    <section class="tabpanel" id="tab-about" role="tabpanel" aria-labelledby="tabbtn-about" hidden>
+      <div class="panel">
+        <h2>About</h2>
+        <div class="body about">
+          <p>
+            A toy real-time telemetry board for the engines of the North Western Railway — a hands-on
+            playground for a streaming data pipeline, dressed up as a locomotive cab.
+          </p>
+          <p>Pull the <strong>master regulator</strong> and each engine starts reporting in. Two paths carry the data:</p>
+          <ul>
+            <li><strong>Live view</strong> — Confluent Cloud → Kafka tap → Server-Sent Events → this page, streaming each fresh reading as it lands.</li>
+            <li><strong>Analytics</strong> — the same events sink to Snowflake, where canned queries roll them up on demand.</li>
+          </ul>
+          <p>
+            Everything is served same-origin: CloudFront fronts the static page (S3) and proxies
+            <code>/stream</code>, <code>/produce</code> and <code>/query</code> to an always-on live-tap
+            container on ECS — no API keys, no CORS, no mixed content. Toot toot!
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <footer class="footer-links">
+      <a href="https://github.com/alexanderaboutanos/thomas-the-tank" target="_blank" rel="noopener" aria-label="View this project on GitHub" title="GitHub repository">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .5C5.37.5 0 5.78 0 12.292c0 5.211 3.438 9.63 8.205 11.188.6.111.82-.254.82-.567 0-.28-.01-1.022-.015-2.005-3.338.711-4.042-1.582-4.042-1.582-.546-1.361-1.335-1.725-1.335-1.725-1.087-.731.084-.716.084-.716 1.205.082 1.838 1.215 1.838 1.215 1.07 1.793 2.809 1.275 3.495.975.108-.758.417-1.276.76-1.57-2.665-.295-5.466-1.309-5.466-5.827 0-1.287.465-2.339 1.235-3.164-.135-.295-.54-1.494.105-3.117 0 0 1.005-.31 3.3 1.209.96-.262 1.98-.392 3-.398 1.02.006 2.04.136 3 .398 2.28-1.519 3.285-1.209 3.285-1.209.645 1.623.24 2.822.12 3.117.765.825 1.23 1.877 1.23 3.164 0 4.53-2.805 5.527-5.475 5.817.42.354.81 1.077.81 2.182 0 1.578-.015 2.846-.015 3.229 0 .315.21.689.825.573C20.565 21.917 24 17.495 24 12.292 24 5.78 18.627.5 12 .5z"/></svg>
+      </a>
+      <a href="https://aboutanos.com" target="_blank" rel="noopener" aria-label="Alexander Aboutanos — personal site" title="aboutanos.com">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm6.93 6h-2.95a15.65 15.65 0 00-1.38-3.56A8.03 8.03 0 0118.93 8zM12 4.04c.83 1.2 1.48 2.53 1.91 3.96h-3.82c.43-1.43 1.08-2.76 1.91-3.96zM4.26 14a7.96 7.96 0 010-4h3.38a16.5 16.5 0 000 4H4.26zm.81 2h2.95c.32 1.25.78 2.45 1.38 3.56A8.03 8.03 0 015.07 16zm2.95-8H5.07a8.03 8.03 0 014.33-3.56A15.65 15.65 0 008.02 8zM12 19.96c-.83-1.2-1.48-2.53-1.91-3.96h3.82c-.43 1.43-1.08 2.76-1.91 3.96zM14.34 14H9.66a14.7 14.7 0 010-4h4.68a14.7 14.7 0 010 4zm.25 5.56c.6-1.11 1.06-2.31 1.38-3.56h2.95a8.03 8.03 0 01-4.33 3.56zM16.36 14a16.5 16.5 0 000-4h3.38a7.96 7.96 0 010 4h-3.38z"/></svg>
+      </a>
+    </footer>
   </main>
 
   <script>
-    // Point this at your deployed API Gateway endpoint (terraform output api_endpoint).
-    // No trailing slash — the routes are appended as "/produce", "/latest", "/query".
-    const API_BASE = "https://3xbw6f984c.execute-api.us-east-2.amazonaws.com";
+    // Everything is SAME-ORIGIN: CloudFront serves this page (S3) and proxies
+    // /stream, /produce and /query to the ALB in front of the always-on live-tap
+    // container. So the routes are plain relative paths — no API base, no CORS,
+    // no mixed-content. (This is the co-requisite of retiring API Gateway: once
+    // it's gone there's no …execute-api… host left for the page to point at.)
     const TICK_MS = 2000;
-
-    document.getElementById("ep").textContent = API_BASE;
-
-    // ── Live view + master switch ─────────────────────────────────────────────
-    let timer = null;
 
     function doorCell(status) {
       const cls = status === "open" ? "doors-open" : "doors-closed";
       return `<span class="${cls}">${status}</span>`;
     }
 
-    function renderLatest(engines) {
-      const rows = (engines || []).map(e => `<tr>
+    // ── Live view via SSE (the live Kafka tap) ────────────────────────────────
+    // Served straight from Kafka, decoupled from production: the EventSource
+    // stays open for the life of the page, the master regulator below only drives
+    // /produce. A snapshot-on-connect paints last-known state immediately; each
+    // engine's fresh reading then streams in as an `update`. The browser auto-
+    // reconnects on a dropped stream, and every (re)connect re-fires `snapshot`,
+    // so the table self-heals.
+    const engines = new Map();  // engine_id -> latest reading
+
+    function renderLatest() {
+      const tbody = document.getElementById("rows");
+      if (engines.size === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="muted">no readings yet — pull the lever to wake the engines…</td></tr>';
+        return;
+      }
+      const sorted = [...engines.values()].sort((a, b) => a.engine_id.localeCompare(b.engine_id));
+      tbody.innerHTML = sorted.map(e => `<tr data-id="${e.engine_id}">
         <td class="engine">${e.engine_id}</td><td>${e.speed_kmh}</td>
         <td>${e.latitude}</td><td>${e.longitude}</td>
-        <td>${doorCell(e.door_status)}</td><td>${e.event_timestamp}</td></tr>`).join("");
-      document.getElementById("rows").innerHTML =
-        rows || '<tr><td colspan="6" class="muted">no rows yet — give Snowflake a few seconds</td></tr>';
+        <td>${doorCell(e.door_status)}</td><td>${e.timestamp}</td></tr>`).join("");
     }
+
+    function flashRow(id) {
+      const tr = document.querySelector(`#rows tr[data-id="${CSS.escape(id)}"]`);
+      if (tr) { tr.classList.remove("flash"); void tr.offsetWidth; tr.classList.add("flash"); }
+    }
+
+    function setStreamStatus(on, label) {
+      const el = document.getElementById("streamStatus");
+      el.textContent = label;
+      el.className = "stream-status " + (on ? "on" : "off");
+    }
+
+    const es = new EventSource("/stream");
+    es.onopen  = () => setStreamStatus(true, "live");
+    es.onerror = () => setStreamStatus(false, "reconnecting…");
+
+    es.addEventListener("snapshot", e => {
+      engines.clear();
+      for (const ev of JSON.parse(e.data)) engines.set(ev.engine_id, ev);
+      renderLatest();
+    });
+
+    es.addEventListener("update", e => {
+      const ev = JSON.parse(e.data);
+      engines.set(ev.engine_id, ev);
+      renderLatest();
+      flashRow(ev.engine_id);
+    });
+
+    // ── Master regulator: drives /produce while thrown ────────────────────────
+    // No longer polls a view — the SSE stream above is always live. Each tick just
+    // emits one round of telemetry for every engine; the live tap picks it up and
+    // pushes it back over /stream within a beat.
+    let timer = null;
 
     async function produce() {
-      try { await fetch(API_BASE + "/produce", { method: "POST" }); }
+      try { await fetch("/produce", { method: "POST" }); }
       catch (err) { console.error("produce failed", err); }
     }
-
-    async function refreshLatest() {
-      try {
-        const res = await fetch(API_BASE + "/latest");
-        renderLatest(await res.json());
-      } catch (err) { console.error("latest failed", err); }
-    }
-
-    // One tick = emit a round of telemetry, then refresh the view. Fired
-    // concurrently; the live view lags produce by Snowpipe Streaming's few seconds.
-    function tick() { produce(); refreshLatest(); }
 
     function setRunning(on) {
       document.getElementById("switch").checked = on;
       const status = document.getElementById("status");
-      status.textContent = on ? "Engines running — telemetry flowing" : "Stopped";
+      status.textContent = on ? "Engines running — telemetry flowing" : "All trains stopped";
       status.className = "status " + (on ? "on" : "off");
-      if (on && !timer) { tick(); timer = setInterval(tick, TICK_MS); }
+      if (on && !timer) { produce(); timer = setInterval(produce, TICK_MS); }
       if (!on && timer) { clearInterval(timer); timer = null; }
     }
 
     document.getElementById("switch").addEventListener("change", e => setRunning(e.target.checked));
 
+    // ── Old analog clock (Sodor time) — decorative, ticks real local time ──────
+    function rotateHand(id, deg) {
+      document.getElementById(id).style.transform = "rotate(" + deg + "deg)";
+    }
+    function tickClock() {
+      const now = new Date();
+      const s = now.getSeconds(), m = now.getMinutes(), h = now.getHours() % 12;
+      rotateHand("clkSec", s * 6);
+      rotateHand("clkMin", m * 6 + s * 0.1);
+      rotateHand("clkHour", h * 30 + m * 0.5);
+    }
+    tickClock();
+    setInterval(tickClock, 1000);
+
     // ── Analytics ─────────────────────────────────────────────────────────────
     const QUERIES = [
-      { name: "speed_leaderboard",     label: "Speed leaderboard" },
-      { name: "throughput_per_minute", label: "Throughput / min" },
-      { name: "doors_open_moving",     label: "Doors open while moving" },
+      { name: "speed_leaderboard",     label: "Speed leaderboard",
+        desc: "Each engine's most recent speed, ranked fastest to slowest." },
+      { name: "throughput_per_minute", label: "Throughput / min",
+        desc: "Telemetry events received per minute over the last 15 minutes — the pipeline's pulse." },
+      { name: "doors_open_moving",     label: "Doors open while moving",
+        desc: "Safety check: engines caught with doors open above 5 km/h, with the top speed each hit." },
     ];
 
     function renderTable(rows, label) {
@@ -262,7 +506,7 @@
       const out = document.getElementById("queryResult");
       out.innerHTML = `<p class="muted">running ${label}…</p>`;
       try {
-        const res = await fetch(API_BASE + "/query?name=" + encodeURIComponent(name));
+        const res = await fetch("/query?name=" + encodeURIComponent(name));
         const data = await res.json(); // { name, rows: [...] }
         out.innerHTML = renderTable(data.rows, label);
       } catch (err) {
@@ -273,12 +517,31 @@
 
     const buttons = document.getElementById("queryButtons");
     for (const q of QUERIES) {
+      const card = document.createElement("div");
+      card.className = "query-card";
       const b = document.createElement("button");
       b.className = "btn";
       b.textContent = q.label;
+      b.title = q.desc;
       b.addEventListener("click", () => runQuery(q.name, q.label));
-      buttons.appendChild(b);
+      const desc = document.createElement("span");
+      desc.className = "query-desc";
+      desc.textContent = q.desc;
+      card.append(b, desc);
+      buttons.appendChild(card);
     }
+
+    // ── Tabs ──────────────────────────────────────────────────────────────────
+    // The live view's DOM stays mounted while hidden, so the SSE stream keeps
+    // updating it in the background regardless of which tab is showing.
+    const tabButtons = document.querySelectorAll(".tab");
+    tabButtons.forEach(btn => btn.addEventListener("click", () => {
+      tabButtons.forEach(b => {
+        const selected = b === btn;
+        b.setAttribute("aria-selected", String(selected));
+        document.getElementById(b.getAttribute("aria-controls")).hidden = !selected;
+      });
+    }));
   </script>
 </body>
 </html>
