@@ -1,7 +1,0 @@
-# Serving Lambda deps. Both carry native code, which is exactly why this function
-# ships as a container image rather than a zip:
-#   confluent-kafka[avro]      -> /produce (librdkafka + fastavro + SR client)
-#   snowflake-connector-python -> /latest and /query (pulls in cryptography)
-# boto3 is preinstalled in the AWS Lambda base image, so it's not listed here.
-confluent-kafka[avro]>=2.0
-snowflake-connector-python>=3.12

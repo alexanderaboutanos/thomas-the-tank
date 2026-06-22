@@ -4,19 +4,22 @@ FastAPI serving app for the Sodor live-tap (build-order step 9).
 One always-on container that serves the live view straight from Kafka over SSE —
 the production-faithful split (Kafka → live, Snowflake → analytics) that closes
 step 6's freshness gap. The step-7 serving Lambda's routes (/produce, /latest,
-/query) fold into THIS app on the same FastAPI server as the Lambda + API Gateway
-are retired (see the build order). This file currently carries the live-tap core;
-the folded routes land alongside in a later increment.
+/query) are now FOLDED into this same FastAPI server (see serving.py) as the
+Lambda + API Gateway are retired — one container serves everything:
 
   GET /stream    Server-Sent Events: a snapshot-on-connect, then one event per
                  new engine reading, with a ~20s heartbeat for idle keep-alive.
+  POST /produce  produce one tick of Avro telemetry to Kafka            (serving.py)
+  GET /latest    live view: latest row per engine, from Snowflake       (serving.py)
+  GET /query     one of three canned analytics queries, from Snowflake  (serving.py)
   GET /healthz   liveness probe for the ALB target group.
   GET /          a localhost test page (same-origin EventSource — no mixed-content).
 
-Blocking work (Kafka, and later Snowflake) stays OFF the event loop: the consumer
-runs in its own thread (see live.py); folded blocking calls will use
-`asyncio.to_thread`. Config is environment-only (local: consumer/.env; cloud: ECS
-injects the Secrets Manager values as env vars) — no boto3, no in-app fetch.
+Blocking work (the Kafka consumer, plus the folded Kafka/Snowflake calls) stays
+OFF the event loop: the consumer runs in its own thread (see live.py) and the
+folded routes hop to worker threads with `asyncio.to_thread` (see serving.py).
+Config is environment-only (local: consumer/.env; cloud: ECS injects the Secrets
+Manager values as env vars) — no boto3, no in-app fetch.
 """
 import asyncio
 import json
@@ -30,6 +33,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, StreamingResponse
 
+import serving
 from live import LiveState, run_consumer
 
 load_dotenv()
@@ -79,6 +83,9 @@ async def lifespan(app):
 
 
 app = FastAPI(title="Sodor live tap", lifespan=lifespan)
+
+# Folded step-7 serving routes (/produce, /latest, /query) — see serving.py.
+app.include_router(serving.router)
 
 
 def _sse(event, data):

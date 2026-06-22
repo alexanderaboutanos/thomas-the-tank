@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
-# Build the serving-Lambda container image and push it to ECR.
+# Build a container image and push it to ECR. Generic — driven entirely by the
+# env vars below, so the same script serves both images in this project: the
+# serving-Lambda image (terraform_data.build_push in ecr.tf, context lambda/) and
+# the step-9 live-tap consumer image (terraform_data.consumer_build_push in
+# consumer.tf, context ../consumer).
 #
-# Invoked by Terraform (terraform_data.build_push in ecr.tf) on every apply where
-# the lambda/ source hash changes; runnable by hand too. Requires a running
-# Docker daemon and AWS creds in the environment. Env vars are passed by the
-# Terraform provisioner:
+# Invoked by Terraform on every apply where the relevant source hash changes;
+# runnable by hand too. Requires a running Docker daemon and AWS creds in the
+# environment. Env vars are passed by the Terraform provisioner:
 #   REPO_URL  ECR repository URL (…dkr.ecr.<region>.amazonaws.com/<name>)
-#   TAG       image tag (content hash of lambda/, so the URI changes on edits)
+#   TAG       image tag (content hash of the context, so the URI changes on edits)
 #   REGION    AWS region
-#   CONTEXT   Docker build context (the lambda/ dir)
+#   CONTEXT   Docker build context dir
 set -euo pipefail
 
 : "${REPO_URL:?}" "${TAG:?}" "${REGION:?}" "${CONTEXT:?}"

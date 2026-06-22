@@ -35,15 +35,22 @@ the owned trade-off (a log-compacted `…-latest` topic would close it).
 
 ### Routes
 
-| Route          | Purpose                                                            |
-|----------------|-------------------------------------------------------------------|
-| `GET /stream`  | SSE live feed (snapshot + per-engine updates + heartbeat)         |
-| `GET /healthz` | liveness probe for the ALB target group                           |
-| `GET /`        | localhost test page (same-origin `EventSource`)                   |
+| Route           | Purpose                                                          | Source       |
+|-----------------|------------------------------------------------------------------|--------------|
+| `GET /stream`   | SSE live feed (snapshot + per-engine updates + heartbeat)        | `app.py`     |
+| `POST /produce` | produce one tick of Avro telemetry to Kafka (WRITE)              | `serving.py` |
+| `GET /latest`   | live view: latest row per engine, from Snowflake                 | `serving.py` |
+| `GET /query`    | one of three canned analytics queries, from Snowflake            | `serving.py` |
+| `GET /healthz`  | liveness probe for the ALB target group                          | `app.py`     |
+| `GET /`         | localhost test page (same-origin `EventSource`)                  | `app.py`     |
 
 The step-7 serving Lambda's routes — `POST /produce`, `GET /latest`, `GET /query` —
-**fold into this same app** as the Lambda + API Gateway are retired (see the build
-order in the root README). They land in a later increment.
+are now **folded into this same app** (`serving.py`) as the Lambda + API Gateway are
+retired (see the build order in the root README). `confluent-kafka` and
+`snowflake-connector-python` are blocking, so those routes hop off the event loop
+with `asyncio.to_thread` — an in-flight Snowflake query never stalls the SSE stream.
+`/produce` authenticates as the **producer** service account (WRITE); the live
+consumer above stays on the read-only **app-live** identity.
 
 ## Run it locally
 
@@ -60,6 +67,9 @@ cp .env.example .env        # fill from `terraform output` in ../confluent:
 #   live_kafka_api_key / -raw live_kafka_api_secret
 #   live_schema_registry_api_key / -raw live_schema_registry_api_secret
 #   kafka_bootstrap_servers, schema_registry_url
+# The folded routes are optional locally (see the second half of .env.example):
+#   /produce needs the PRODUCER keys (WRITE); /latest + /query need SNOWFLAKE_*.
+# Leave them blank to exercise just the live SSE path.
 
 uvicorn app:app --reload --port 8000
 ```
@@ -79,7 +89,10 @@ frames.
 ## Deploy
 
 Containerized and run as a single always-on **Fargate** task behind an **ALB**,
-with **CloudFront** routing `/stream` (caching disabled) to the ALB origin — see
-`../infra`. That's the first piece of this project that **doesn't scale to zero**
-(~a few $/mo always-on); scale the service to 0 between demos and the live view
-goes dark (analytics keep working — they read Snowflake).
+with **CloudFront** routing all the app routes (`/stream`, `/produce`, `/latest`,
+`/query`, `/healthz`, caching disabled) to the ALB origin while the static site
+stays on S3 — see `../infra`. That's the first piece of this project that **doesn't
+scale to zero** (~a few $/mo always-on); scale the service to 0 between demos and
+the live view goes dark (analytics keep working — they read Snowflake). The cloud
+task gets all its creds from Secrets Manager, injected as env vars by the ECS task
+definition — the image carries no AWS SDK.

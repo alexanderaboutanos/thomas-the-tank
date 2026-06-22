@@ -16,9 +16,15 @@ variable "snowflake_secret_name" {
 }
 
 variable "confluent_secret_name" {
-  description = "Secrets Manager secret holding Confluent Kafka + Schema Registry creds (for /produce)."
+  description = "Secrets Manager secret holding the PRODUCER's Confluent Kafka + Schema Registry creds (for /produce, WRITE)."
   type        = string
   default     = "sodor-railway/confluent"
+}
+
+variable "live_confluent_secret_name" {
+  description = "Secrets Manager secret holding the read-only app-live Confluent creds (for the /stream live consumer). Same JSON shape as confluent."
+  type        = string
+  default     = "sodor-railway/confluent-live"
 }
 
 variable "num_engines" {
@@ -27,8 +33,40 @@ variable "num_engines" {
   default     = 5
 }
 
-variable "cors_allow_origins" {
-  description = "Extra origins allowed to call the API beyond the CloudFront URL (always allowed). E.g. [\"http://localhost:8000\"] for local UI dev."
-  type        = list(string)
-  default     = []
+# ─── Live-tap runtime (ECS/Fargate + ALB) ────────────────────────────────────
+
+variable "container_port" {
+  description = "Port the live-tap container (uvicorn) listens on; the ALB target + task SG use it too."
+  type        = number
+  default     = 8000
+}
+
+variable "task_cpu" {
+  description = "Fargate task CPU units (256 = 0.25 vCPU)."
+  type        = number
+  default     = 256
+}
+
+variable "task_memory" {
+  description = "Fargate task memory (MiB). Must be a valid pairing with task_cpu."
+  type        = number
+  default     = 512
+}
+
+variable "desired_count" {
+  description = "Live-tap tasks to run. 1 for the demo; set 0 to go dark between demos (the cost lever)."
+  type        = number
+  default     = 1
+}
+
+variable "topic" {
+  description = "Kafka topic the live consumer reads and /produce writes."
+  type        = string
+  default     = "sodor-telemetry"
+}
+
+variable "live_group_id" {
+  description = "Consumer group.id for the live tap. MUST start with 'sodor-live-' (the app-live ACL prefix)."
+  type        = string
+  default     = "sodor-live-consumer"
 }
