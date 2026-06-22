@@ -12,6 +12,7 @@
   - leader - the one replica that handles all reads/writes for that partition
   - follower - copies the leader's log to stay in sync; never serves clients (promoted to leader if the leader's broker dies)
 - key - hashes to a partition (`hash(key) % num_partitions`); same key → same partition → preserves per-key ordering (here the key is `engine_id`, e.g. `Thomas`)
+- consumer groups - ?
 
 Quick Hierarchy
 
