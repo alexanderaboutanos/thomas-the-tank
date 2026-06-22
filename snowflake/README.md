@@ -73,7 +73,26 @@ terraform output table              # -> /confluent snowflake_table
 
 ## Verify rows land
 
-Run the producer (`/producer`), then in a Snowsight worksheet:
+Run the producer (`/producer`), then query the table either way below.
+
+**Fastest: the `snow` CLI (no browser, non-interactive).** A connection named
+`sodor` is preconfigured in `~/.snowflake/connections.toml` — admin **key-pair
+(JWT)** auth (`rsa_key_admin.p8`), `ACCOUNTADMIN`, warehouse `SODOR_WH`, defaulted
+to db `SODOR_RAILWAY` / schema `TELEMETRY`. It's also the default connection, so
+`-c sodor` is optional:
+
+```bash
+snow sql -c sodor -q "SELECT COUNT(*) AS raw_rows FROM SODOR_RAILWAY.TELEMETRY.TELEMETRY_RAW;"
+snow sql -c sodor -q "SELECT engine_id, event_timestamp, speed_kmh FROM SODOR_RAILWAY.TELEMETRY.TELEMETRY_LATEST ORDER BY engine_id;"
+```
+
+> The other `snow` connection, `ML23422`, uses interactive OAuth and fails
+> non-interactively with *"Password is empty"* — use `sodor` for scripts/agents.
+> If you ever need to rebuild `sodor` from flags instead of the config, pass
+> `-x` (`--temporary-connection`) with `--account NZYMBPI-ML23422 --user … \
+> --authenticator SNOWFLAKE_JWT --private-key-path snowflake/rsa_key_admin.p8`.
+
+**Or in a Snowsight worksheet:**
 
 ```sql
 SELECT COUNT(*) FROM SODOR_RAILWAY.TELEMETRY.TELEMETRY_RAW;          -- raw VARIANT rows
