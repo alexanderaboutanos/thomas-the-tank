@@ -6,5 +6,6 @@ snowflake_secret_name = "sodor-railway/snowflake"
 confluent_secret_name = "sodor-railway/confluent"
 num_engines           = 5
 
-# Lock CORS down to the CloudFront URL once the distribution exists:
-# cors_allow_origins = ["https://dxxxxxxxxxxxxx.cloudfront.net"]
+# CORS is locked to the CloudFront URL automatically (see infra/api.tf).
+# Add extra origins here only for local dev, e.g.:
+# cors_allow_origins = ["http://localhost:8000"]

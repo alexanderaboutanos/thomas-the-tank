@@ -28,7 +28,7 @@ variable "num_engines" {
 }
 
 variable "cors_allow_origins" {
-  description = "Origins allowed to call the API. Tighten to the CloudFront URL."
+  description = "Extra origins allowed to call the API beyond the CloudFront URL (always allowed). E.g. [\"http://localhost:8000\"] for local UI dev."
   type        = list(string)
-  default     = ["*"]
+  default     = []
 }

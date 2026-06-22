@@ -8,9 +8,11 @@ resource "aws_apigatewayv2_api" "api" {
   protocol_type = "HTTP"
 
   # API Gateway owns the CORS response headers — the Lambda must NOT also set
-  # them, or browsers reject the duplicate. Tighten allow_origins below.
+  # them, or browsers reject the duplicate. Locked to the CloudFront origin
+  # (tracked from the distribution, so it never goes stale); var.cors_allow_origins
+  # appends extras such as http://localhost:8000 for local UI dev.
   cors_configuration {
-    allow_origins = var.cors_allow_origins
+    allow_origins = concat(["https://${aws_cloudfront_distribution.site.domain_name}"], var.cors_allow_origins)
     allow_methods = ["GET", "POST"]
     allow_headers = ["*"]
   }
