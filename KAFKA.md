@@ -12,7 +12,7 @@
   - leader - the one replica that handles all reads/writes for that partition
   - follower - copies the leader's log to stay in sync; never serves clients (promoted to leader if the leader's broker dies)
 - key - hashes to a partition (`hash(key) % num_partitions`); same key → same partition → preserves per-key ordering (here the key is `engine_id`, e.g. `Thomas`)
-- consumer groups - ?
+- consumer groups - a single logical subscriber to a topic that happens to be made of one or more worker processes. The group has a name
 
 Quick Hierarchy
 
@@ -54,6 +54,8 @@ What is tiered storage in a cluster?
 - Kafka keeps recent ("hot") segments on fast local broker disk and offloads older ("cold") segments to cheap remote object storage (e.g. S3).
 - Consumers read either tier transparently, so you can keep a long retention window without paying for expensive local disk.
 
+How is Kafka different from SQS?
+- one way is that a consumer reading a message from a kafka topic does not consume and destroy the message. Instead, once a consumer reads a message, it just moves it's partiular offset forward. this means another *consumer group* can be reading on the same exact partition and have a totally different offset. So, a message will stay in a partition until it expires (as determined elsewhere by policy). This is different than SQS, where a message is read and then destroyed.
 
 
 ## Avro
