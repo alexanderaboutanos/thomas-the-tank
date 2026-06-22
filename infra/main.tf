@@ -24,6 +24,10 @@ terraform {
 
 provider "aws" {
   region = var.region
+  # Pinned to the personal account (319120789796) after the corpa->personal
+  # migration. Note: build_and_push.sh's `aws ecr` call ignores this block and
+  # uses ambient creds, so apply with AWS_PROFILE=personal too (belt & suspenders).
+  profile = "personal"
 }
 
 locals {
