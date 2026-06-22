@@ -390,3 +390,122 @@ resource "confluent_connector" "snowflake_sink" {
     confluent_role_binding.app-connector-sr-read,
   ]
 }
+
+# ─── app-live: the step-9 live-tap consumer's Kafka identity ──────────────────
+
+# The always-on Fargate consumer (../consumer) that serves the live view straight
+# from Kafka — the production-faithful split that closes step 6's freshness gap.
+# It joins sodor-telemetry under its OWN consumer group, independent of the
+# Snowflake sink's group: the same topic fanned out to two consumer groups, each
+# reading every message at its own offset. That independence is the whole point —
+# the live tap and the warehouse sink don't compete for the topic.
+#
+# Read-only and minimal, mirroring app-connector: DESCRIBE the cluster, READ the
+# topic, READ its consumer group, and DeveloperRead on the value subject (to
+# deserialize Avro). No WRITE anywhere, no DLQ. The group is a PREFIXED ACL on
+# "sodor-live-" so a stable single-task group.id ("sodor-live-consumer") works
+# today AND a per-instance unique group ("sodor-live-<task>") works later without
+# an ACL change — that's the documented HA fan-out path (one task per partition,
+# each its own group, every instance sees every message).
+resource "confluent_service_account" "app-live" {
+  display_name = "sodor-app-live"
+  description  = "Identity for the step-9 live-tap Fargate consumer — reads telemetry"
+}
+
+resource "confluent_api_key" "app-live-kafka-api-key" {
+  display_name = "sodor-app-live-kafka-api-key"
+  description  = "Kafka API key owned by the sodor-app-live service account"
+  owner {
+    id          = confluent_service_account.app-live.id
+    api_version = confluent_service_account.app-live.api_version
+    kind        = confluent_service_account.app-live.kind
+  }
+  managed_resource {
+    id          = confluent_kafka_cluster.basic.id
+    api_version = confluent_kafka_cluster.basic.api_version
+    kind        = confluent_kafka_cluster.basic.kind
+    environment {
+      id = confluent_environment.sodor.id
+    }
+  }
+}
+
+resource "confluent_kafka_acl" "app-live-describe-cluster" {
+  kafka_cluster {
+    id = confluent_kafka_cluster.basic.id
+  }
+  resource_type = "CLUSTER"
+  resource_name = "kafka-cluster"
+  pattern_type  = "LITERAL"
+  principal     = "User:${confluent_service_account.app-live.id}"
+  host          = "*"
+  operation     = "DESCRIBE"
+  permission    = "ALLOW"
+  rest_endpoint = confluent_kafka_cluster.basic.rest_endpoint
+  credentials {
+    key    = confluent_api_key.app-manager-kafka-api-key.id
+    secret = confluent_api_key.app-manager-kafka-api-key.secret
+  }
+}
+
+resource "confluent_kafka_acl" "app-live-read-on-topic" {
+  kafka_cluster {
+    id = confluent_kafka_cluster.basic.id
+  }
+  resource_type = "TOPIC"
+  resource_name = confluent_kafka_topic.telemetry.topic_name
+  pattern_type  = "LITERAL"
+  principal     = "User:${confluent_service_account.app-live.id}"
+  host          = "*"
+  operation     = "READ"
+  permission    = "ALLOW"
+  rest_endpoint = confluent_kafka_cluster.basic.rest_endpoint
+  credentials {
+    key    = confluent_api_key.app-manager-kafka-api-key.id
+    secret = confluent_api_key.app-manager-kafka-api-key.secret
+  }
+}
+
+resource "confluent_kafka_acl" "app-live-read-on-group" {
+  kafka_cluster {
+    id = confluent_kafka_cluster.basic.id
+  }
+  resource_type = "GROUP"
+  resource_name = "sodor-live-"
+  pattern_type  = "PREFIXED"
+  principal     = "User:${confluent_service_account.app-live.id}"
+  host          = "*"
+  operation     = "READ"
+  permission    = "ALLOW"
+  rest_endpoint = confluent_kafka_cluster.basic.rest_endpoint
+  credentials {
+    key    = confluent_api_key.app-manager-kafka-api-key.id
+    secret = confluent_api_key.app-manager-kafka-api-key.secret
+  }
+}
+
+# SR API key + DeveloperRead on the value subject — the consumer deserializes
+# Avro, so it reads the registered schema, same as the producer and the connector.
+resource "confluent_api_key" "app-live-sr-api-key" {
+  display_name = "sodor-app-live-sr-api-key"
+  description  = "Schema Registry API key for the live-tap consumer — reads the value schema"
+  owner {
+    id          = confluent_service_account.app-live.id
+    api_version = confluent_service_account.app-live.api_version
+    kind        = confluent_service_account.app-live.kind
+  }
+  managed_resource {
+    id          = data.confluent_schema_registry_cluster.sr.id
+    api_version = data.confluent_schema_registry_cluster.sr.api_version
+    kind        = data.confluent_schema_registry_cluster.sr.kind
+    environment {
+      id = confluent_environment.sodor.id
+    }
+  }
+}
+
+resource "confluent_role_binding" "app-live-sr-read" {
+  principal   = "User:${confluent_service_account.app-live.id}"
+  role_name   = "DeveloperRead"
+  crn_pattern = "${data.confluent_schema_registry_cluster.sr.resource_name}/subject=${confluent_kafka_topic.telemetry.topic_name}-value"
+}

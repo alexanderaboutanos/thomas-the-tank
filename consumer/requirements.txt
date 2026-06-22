@@ -1,0 +1,8 @@
+# Live-tap FastAPI server (step 9). confluent-kafka carries librdkafka (native) +
+# fastavro for Avro deserialization — the same native-deps reason the serving
+# image is a container, not a zip. snowflake-connector-python lands here when the
+# /latest + /query routes fold in from the step-7 Lambda.
+confluent-kafka[avro]>=2.0
+fastapi>=0.110
+uvicorn[standard]>=0.27
+python-dotenv>=1.0

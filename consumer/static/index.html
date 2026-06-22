@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sodor live tap — local SSE test</title>
+  <style>
+    body { font-family: system-ui, "Segoe UI", sans-serif; margin: 2rem; color: #1b2330; }
+    h1 { font-size: 1.3rem; margin: 0 0 .3rem; }
+    .muted { color: #98a0ac; }
+    code { background: #f0eee6; padding: .1rem .35rem; border-radius: 3px; }
+    #status { font-weight: 700; }
+    .on  { color: #2e7d32; }
+    .off { color: #c8102e; }
+    table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+    th { background: #1d4e89; color: #fff; text-align: left; padding: .5rem .7rem; font-size: .78rem; letter-spacing: .04em; text-transform: uppercase; }
+    td { border-bottom: 1px solid #eee; padding: .5rem .7rem; }
+    tr:nth-child(even) td { background: #faf8f1; }
+    .doors-open { color: #c8102e; font-weight: 600; }
+    .doors-closed { color: #2e7d32; font-weight: 600; }
+    .flash { animation: flash .7s ease-out; }
+    @keyframes flash { from { background: #fff7df; } to { background: transparent; } }
+  </style>
+</head>
+<body>
+  <h1>🚂 Sodor live tap — local SSE test</h1>
+  <p class="muted">
+    Streaming <code>GET /stream</code> via <code>EventSource</code> (same-origin localhost —
+    no CORS, no mixed-content). Run <code>python producer.py</code> in another terminal to wake the engines.
+  </p>
+  <p>Connection: <span id="status" class="off">connecting…</span> &middot;
+     last event <span id="last" class="muted">—</span></p>
+
+  <table>
+    <thead>
+      <tr><th>Engine</th><th>Speed (km/h)</th><th>Lat</th><th>Lon</th><th>Doors</th><th>Timestamp (UTC)</th></tr>
+    </thead>
+    <tbody id="rows"><tr><td colspan="6" class="muted">waiting for the snapshot…</td></tr></tbody>
+  </table>
+
+  <script>
+    const rows = document.getElementById("rows");
+    const statusEl = document.getElementById("status");
+    const lastEl = document.getElementById("last");
+    const engines = new Map();  // engine_id -> latest event
+
+    function doorCell(s) {
+      const cls = s === "open" ? "doors-open" : "doors-closed";
+      return `<span class="${cls}">${s}</span>`;
+    }
+
+    function render() {
+      if (engines.size === 0) {
+        rows.innerHTML = '<tr><td colspan="6" class="muted">no readings yet — start the producer</td></tr>';
+        return;
+      }
+      const sorted = [...engines.values()].sort((a, b) => a.engine_id.localeCompare(b.engine_id));
+      rows.innerHTML = sorted.map(e => `<tr data-id="${e.engine_id}">
+        <td><strong>${e.engine_id}</strong></td>
+        <td>${e.speed_kmh}</td><td>${e.latitude}</td><td>${e.longitude}</td>
+        <td>${doorCell(e.door_status)}</td><td>${e.timestamp}</td></tr>`).join("");
+    }
+
+    function flash(id) {
+      const tr = rows.querySelector(`tr[data-id="${CSS.escape(id)}"]`);
+      if (tr) { tr.classList.remove("flash"); void tr.offsetWidth; tr.classList.add("flash"); }
+    }
+
+    function mark(kind) { lastEl.textContent = new Date().toLocaleTimeString() + " (" + kind + ")"; }
+
+    // Same-origin: the page is served by the app at "/", so "/stream" needs no CORS.
+    const es = new EventSource("/stream");
+    es.onopen  = () => { statusEl.textContent = "live"; statusEl.className = "on"; };
+    es.onerror = () => { statusEl.textContent = "reconnecting…"; statusEl.className = "off"; };
+
+    es.addEventListener("snapshot", e => {
+      engines.clear();
+      for (const ev of JSON.parse(e.data)) engines.set(ev.engine_id, ev);
+      render(); mark("snapshot");
+    });
+
+    es.addEventListener("update", e => {
+      const ev = JSON.parse(e.data);
+      engines.set(ev.engine_id, ev);
+      render(); flash(ev.engine_id); mark("update");
+    });
+  </script>
+</body>
+</html>

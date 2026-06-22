@@ -31,3 +31,29 @@ output "producer_schema_registry_api_secret" {
   value       = confluent_api_key.app-producer-sr-api-key.secret
   sensitive   = true
 }
+
+# ─── Live-tap consumer (step 9) — feed these into consumer/.env locally, then
+# into the ECS task's Secrets Manager secret in ../infra. The bootstrap servers
+# and schema_registry_url outputs above are shared (same cluster + SR). ─────────
+
+output "live_kafka_api_key" {
+  description = "KAFKA_API_KEY for the live-tap consumer (consumer/.env)."
+  value       = confluent_api_key.app-live-kafka-api-key.id
+}
+
+output "live_kafka_api_secret" {
+  description = "KAFKA_API_SECRET for the live-tap consumer (consumer/.env)."
+  value       = confluent_api_key.app-live-kafka-api-key.secret
+  sensitive   = true
+}
+
+output "live_schema_registry_api_key" {
+  description = "SCHEMA_REGISTRY_API_KEY for the live-tap consumer (consumer/.env)."
+  value       = confluent_api_key.app-live-sr-api-key.id
+}
+
+output "live_schema_registry_api_secret" {
+  description = "SCHEMA_REGISTRY_API_SECRET for the live-tap consumer (consumer/.env)."
+  value       = confluent_api_key.app-live-sr-api-key.secret
+  sensitive   = true
+}
