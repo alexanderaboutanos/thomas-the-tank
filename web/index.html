@@ -259,27 +259,31 @@
     }
     .tabpanel[hidden] { display: none; }
 
-    /* ── Architecture diagram (About-tab hero) ──────────────────────────────
-       The diagram itself lives in the self-contained web/architecture.svg (the
-       page palette + the gold-streaming / red-query motion idiom are baked into
-       that file) so the same asset renders here and in the repo README. This
-       wrapper just frames it — the blueprint-grid card + caption. */
-    .arch {
-      margin: 0 0 1.4rem; padding: 1rem .75rem .55rem;
-      border: 1px solid #e2ddcf; border-radius: 10px;
-      background:
-        radial-gradient(circle at 1px 1px, rgba(21,55,95,.05) 1px, transparent 0) 0 0 / 20px 20px,
-        linear-gradient(180deg, #ffffff, #faf8f1);
-      overflow-x: auto;
-    }
-    .arch img { display: block; width: 100%; min-width: 680px; max-width: 1000px; height: auto; margin: 0 auto; }
-    .arch figcaption { margin: .55rem .4rem 0; font-size: .72rem; color: #6b7280; line-height: 1.55; text-align: center; }
-
-    /* About copy */
-    .about p { margin: 0 0 1rem; line-height: 1.55; }
-    .about p:last-child { margin-bottom: 0; }
-    .about ul { margin: 0 0 1rem; padding-left: 1.2rem; line-height: 1.6; }
-    .about code { background: #faf8f1; padding: .1rem .35rem; border-radius: 3px; border: 1px solid #eee; font-size: .9em; }
+    /* ── About tab: the rendered README (single source of truth) ─────────────
+       The About panel renders web/README.md verbatim via the vendored marked,
+       so there's no second copy to keep in sync. These rules style marked's
+       output to the page palette; the README's image refs (web/architecture.svg)
+       are rewritten to the site root at render time. */
+    .readme-body { line-height: 1.6; color: var(--ink); }
+    .readme-body > :first-child { margin-top: 0; }
+    .readme-body > :last-child { margin-bottom: 0; }
+    .readme-body h1 { font-size: 1.55rem; color: var(--nwr-blue-dark); margin: 1.8rem 0 .8rem; }
+    .readme-body h2 { font-size: 1.2rem; color: var(--nwr-blue-dark); margin: 1.8rem 0 .7rem; padding-bottom: .3rem; border-bottom: 2px solid #e2ddcf; }
+    .readme-body h3 { font-size: 1rem; color: var(--nwr-blue); margin: 1.3rem 0 .5rem; }
+    .readme-body p { margin: 0 0 1rem; }
+    .readme-body ul, .readme-body ol { margin: 0 0 1rem; padding-left: 1.3rem; }
+    .readme-body li { margin: .25rem 0; }
+    .readme-body a { color: var(--nwr-blue); text-decoration: none; font-weight: 600; }
+    .readme-body a:hover { text-decoration: underline; }
+    .readme-body strong { color: var(--nwr-blue-dark); }
+    .readme-body code { background: #faf8f1; padding: .1rem .35rem; border-radius: 3px; border: 1px solid #eee; font-size: .9em; }
+    .readme-body img { display: block; max-width: 100%; height: auto; margin: 1.2rem auto; border-radius: 10px; }
+    .readme-body hr { border: 0; border-top: 1px solid #e2ddcf; margin: 1.8rem 0; }
+    .readme-body table { border-collapse: collapse; width: 100%; margin: 0 0 1.2rem; font-size: .9rem; }
+    .readme-body thead th { background: var(--nwr-blue); color: #fff; text-align: left; padding: .55rem .7rem; font-size: .72rem; letter-spacing: .04em; text-transform: uppercase; }
+    .readme-body tbody td { border-bottom: 1px solid #eee; padding: .5rem .7rem; vertical-align: top; }
+    .readme-body tbody tr:nth-child(even) { background: #faf8f1; }
+    .readme-body blockquote { margin: 0 0 1rem; padding: .4rem 1rem; border-left: 3px solid var(--nwr-gold); background: #faf8f1; color: #555; }
 
     /* Footer icon links */
     footer { padding: 0; }
@@ -377,35 +381,13 @@
     <!-- About: what this is and how the data gets here -->
     <section class="tabpanel" id="tab-about" role="tabpanel" aria-labelledby="tabbtn-about" hidden>
       <div class="panel">
-        <div class="body about">
-
-          <!-- Streaming-flow diagram: producer → Confluent/Kafka → two consumer
-               groups → Snowflake + live web view. The diagram is the standalone,
-               self-contained web/architecture.svg (also embedded in the README);
-               the .arch wrapper just frames it. -->
-          <figure class="arch">
-            <img src="architecture.svg"
-                 alt="North Western Railway streaming data pipeline: engine telemetry flows into a three-partition Kafka topic on Confluent Cloud; two independent consumer groups read the same stream — a Snowflake Sink Connector writes events to Snowflake, and an ECS Fargate task taps the stream and pushes live readings to the web view over Server-Sent Events, while analytics queries round-trip through that task to Snowflake." />
-            <figcaption>
-              One topic, three partitions — two independent consumer groups read the <em>same</em> stream. The live view streams over SSE;
-              analytics queries round-trip through the ECS task to Snowflake (speed leaderboard · throughput/min · doors-open-while-moving).
-            </figcaption>
-          </figure>
-
-          <p>
-            A toy real-time telemetry board for the engines of the North Western Railway — a hands-on
-            playground for a streaming data pipeline, dressed up as a locomotive cab.
-          </p>
-          <p>Pull the <strong>master regulator</strong> and each engine starts reporting in. Two paths carry the data:</p>
-          <ul>
-            <li><strong>Live view</strong> — Confluent Cloud → Kafka tap → Server-Sent Events → this page, streaming each fresh reading as it lands.</li>
-            <li><strong>Analytics</strong> — the same events sink to Snowflake, where canned queries roll them up on demand.</li>
-          </ul>
-          <p>
-            Everything is served same-origin: CloudFront fronts the static page (S3) and proxies
-            <code>/stream</code>, <code>/produce</code> and <code>/query</code> to an always-on live-tap
-            container on ECS — no API keys, no CORS, no mixed content. Toot toot!
-          </p>
+        <div class="body">
+          <!-- The About tab renders the repo README.md verbatim — single source
+               of truth, no second copy to keep in sync. Fetched and rendered by
+               renderReadme() at the bottom of the page script via vendored marked. -->
+          <div id="readme" class="readme-body" aria-busy="true" aria-live="polite">
+            <p class="muted">Loading the README…</p>
+          </div>
         </div>
       </div>
     </section>
@@ -422,6 +404,9 @@
     </footer>
   </main>
 
+  <!-- Vendored Markdown renderer (marked), served same-origin from our bucket —
+       no third-party CDN at runtime. Drives the README-backed About tab. -->
+  <script src="marked.min.js"></script>
   <script>
     // Everything is SAME-ORIGIN: CloudFront serves this page (S3) and proxies
     // /stream, /produce and /query to the ALB in front of the always-on live-tap
@@ -598,6 +583,28 @@
         document.getElementById(b.getAttribute("aria-controls")).hidden = !selected;
       });
     }));
+
+    // ── About: render the repo README verbatim (single source of truth) ────────
+    // The About tab IS the rendered README.md — there's no second copy to keep in
+    // sync. We fetch the same README that ships to S3, rewrite its repo-relative
+    // image paths (web/foo → foo, since on the site those assets sit at the root),
+    // and render with the vendored marked. GFM tables (Endpoints, Stack) need a
+    // real parser, which is why we render rather than hand-maintain HTML.
+    async function renderReadme() {
+      const target = document.getElementById("readme");
+      try {
+        const res = await fetch("README.md", { cache: "no-cache" });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const md = (await res.text()).replace(/\]\(web\//g, "](");  // web/architecture.svg → architecture.svg
+        target.innerHTML = marked.parse(md);
+      } catch (err) {
+        target.innerHTML = '<p class="muted">Couldn’t load the README here — ' +
+          'read it on <a href="https://github.com/alexanderaboutanos/thomas-the-tank">GitHub</a>.</p>';
+      } finally {
+        target.removeAttribute("aria-busy");
+      }
+    }
+    renderReadme();
   </script>
 </body>
 </html>

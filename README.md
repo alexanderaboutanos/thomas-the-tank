@@ -1,7 +1,3 @@
-# Thomas The Tank
-
-![Thomas the Tank Engine emerging from a tunnel](web/thomas.png)
-
 Hi, I'm Alexander and I love building software for people.
 
 This is a train-telemetry streaming pipeline built on the Kafka → Confluent → Snowflake

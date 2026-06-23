@@ -45,6 +45,31 @@ resource "aws_s3_object" "architecture" {
   content_type = "image/svg+xml"
 }
 
+# The repo README, rendered verbatim in the About tab as the single source of
+# truth — no second copy to keep in sync. no-cache so a re-uploaded README shows
+# up on the next load (matching index.html). Its repo-relative image ref
+# (web/architecture.svg) is rewritten to the site root at render time, where
+# that asset already lives.
+resource "aws_s3_object" "readme" {
+  bucket        = aws_s3_bucket.site.id
+  key           = "README.md"
+  source        = "${path.module}/../README.md"
+  etag          = filemd5("${path.module}/../README.md")
+  content_type  = "text/markdown; charset=utf-8"
+  cache_control = "no-cache"
+}
+
+# Vendored Markdown renderer (marked) for the About tab. Served same-origin from
+# our own bucket — no third-party CDN at runtime — in keeping with the rest of
+# the site (no API keys, no CORS, no mixed content).
+resource "aws_s3_object" "marked" {
+  bucket       = aws_s3_bucket.site.id
+  key          = "marked.min.js"
+  source       = "${path.module}/../web/marked.min.js"
+  etag         = filemd5("${path.module}/../web/marked.min.js")
+  content_type = "text/javascript; charset=utf-8"
+}
+
 # Origin Access Control: CloudFront reads the bucket; the bucket stays private.
 resource "aws_cloudfront_origin_access_control" "site" {
   name                              = "${local.name_prefix}-site"
