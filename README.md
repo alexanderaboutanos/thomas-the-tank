@@ -12,8 +12,7 @@ and an always-on live tap, and surface on an interactive webpage. Everything run
 I loved Thomas the Tank Engine as a kid, so the theme was a given — the North Western Railway
 on the Island of Sodor.
 
-**Live demo:** https://d3seigtcpso2da.cloudfront.net — deployed in AWS `us-east-2`
-(co-located with the Confluent cluster).
+**Live demo:** https://d3seigtcpso2da.cloudfront.net — deployed in AWS `us-east-2`.
 
 ## Architecture
 
