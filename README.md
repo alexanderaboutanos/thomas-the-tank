@@ -2,58 +2,71 @@
 
 ![Thomas the Tank Engine emerging from a tunnel](web/thomas.png)
 
-Hello, I'm Alexander and I love building software for people. 
+Hi, I'm Alexander and I love building software for people.
 
-I built a train IoT data pipeline using the Kafka, Confluent, and Snowflake stack.
-Trains emit telemetry data (speed, location, etc.), those messages stream through Kafka (Confluent), they land in 
-a Snowflake database for analytics, and finally everything is visibile on an interactive webpage. Everything is hosted in the cloud. 
+This is a train-telemetry streaming pipeline built on the Kafka → Confluent → Snowflake
+stack. Simulated engines emit telemetry (speed, location, door status, …); the messages
+stream through Kafka on Confluent Cloud, fan out to both a Snowflake warehouse for analytics
+and an always-on live tap, and surface on an interactive webpage. Everything runs in the cloud.
 
-I loved Thomas the Tank Engine as a kid, so the theme was a given... the North Western Railway on the Island of Sodor...
+I loved Thomas the Tank Engine as a kid, so the theme was a given — the North Western Railway
+on the Island of Sodor.
 
-The website is found here: https://d3seigtcpso2da.cloudfront.net
+**Live demo:** https://d3seigtcpso2da.cloudfront.net — deployed in AWS `us-east-2`
+(co-located with the Confluent cluster).
 
 ## Architecture
 
 ![North Western Railway streaming data pipeline — engine telemetry into a three-partition Kafka topic on Confluent Cloud, fanned out to two independent consumer groups: a Snowflake Sink Connector (analytics) and an always-on ECS Fargate live tap that streams to the web view over SSE; analytics queries round-trip through that task to Snowflake.](web/architecture.svg)
 
-
 ### Producer
-Navigate to the webpage and pull the lever on the Master Regulator. Now the trains are moving! Behind the scenes, a python script is now running and emiting dummy telemetry data every 2 seconds until it's told to stop. Rather than using JSON, it emits Avro... for 2 reasons: it's faster and it gives a firm data contract. The telemetry data will continue to flow until you pul the lever and tell the trains to stop.
+
+Pull the lever on the Master Regulator and the trains start moving. Each tick fires
+`POST /produce`, which emits one telemetry reading **per engine** to Kafka; the browser
+repeats it on a timer until you throw the lever back. 
+
+Messages are **Avro**, not JSON — it's more compact on the wire and, via the Schema Registry,
+gives the pipeline a firm data contract.
 
 ### Stream
-The telemetry data is emitted to an Apache Kafka topic, managed by Confluent. There are three partitions in this topic and the message key used is the `engine_id`, which is the name of the train (Thomas, Henry, etc.). Messages land in the appropriate partition and are consumed by 2 consumer groups...
 
-### Consumer Groups
-There are 2 groups consuming this data....
-#### A - Snowflake Sink - Analytics 
+Telemetry lands on a single Apache Kafka topic (`sodor-telemetry`) on Confluent Cloud. The
+topic has **3 partitions** and is keyed by `engine_id` (the train's name — Thomas, Henry, …),
+so every reading for a given engine keeps its order on one partition. Two independent consumer
+groups read the topic — Kafka's fan-out made physical.
 
-the managed **Snowflake Sink Connector** lands the same events in **Snowflake**
-  via **Snowpipe Streaming** (~3–30s), where canned aggregate queries (`/query`) roll
-  them up on demand.
+### Consumer group A — Snowflake sink (analytics)
 
-#### B - Fargate Container - Live View
+The managed **Snowflake Sink Connector** lands every event in **Snowflake** via
+**Snowpipe Streaming** (~3–30s end to end). Analytics are pre-defined Snowflake **views**
+(speed leaderboard, throughput per minute, doors-open-while-moving), queried on demand
+through `GET /query`.
 
+### Consumer group B — Fargate live tap (live view)
 
+A small **always-on ECS Fargate container** taps the topic under its own consumer group,
+holds a latest-per-engine map in memory, and pushes each fresh reading to the browser over
+**Server-Sent Events** (`GET /stream`) — straight off Kafka, no warehouse in the path. New
+clients get a snapshot-on-connect, then live updates, with a heartbeat to keep idle
+connections open.
 
-- **Live view** — a small **always-on Fargate container** taps Kafka under its own consumer
-  group, holds a latest-per-engine map in memory, and streams each fresh reading to the browser
-  over **Server-Sent Events** (`/stream`) — straight off the topic, no warehouse in the path.
-- **Analytics** — 
+### Web
 
+One **CloudFront** distribution fronts everything: the static site from S3, plus same-origin
+app routes proxied to the live-tap container behind an ALB. No CORS, no separate API host.
 
-### Webpage
-**Web UI + API** — https://d3seigtcpso2da.cloudfront.net — one CloudFront origin: the static site plus same-origin routes `POST /produce`, `GET /latest`, `GET /query?name=…`, and the live SSE stream `GET /stream`. 
+## Endpoints
 
+All served same-origin from the CloudFront domain above.
 
-~~~~~~~~~~~~
-
-- need a short list of endpoints
-- deployed on us-east-2
-- 
-
-
-~~~~~~~~~~~
-
+| Method & path        | Source            | Purpose                                                        |
+|----------------------|-------------------|---------------------------------------------------------------|
+| `GET /stream`        | Kafka (live tap)  | SSE — snapshot on connect, then one event per new reading      |
+| `POST /produce`      | Kafka (producer)  | Emit one tick of Avro telemetry for every engine               |
+| `GET /query?name=…`  | Snowflake         | Run one of three canned analytics views                        |
+| `GET /latest`        | Snowflake         | Latest row per engine (warehouse-backed; UI uses `/stream`)    |
+| `GET /healthz`       | container         | ALB liveness probe                                             |
+| `GET /`              | container/S3      | The web UI                                                     |
 
 ## Stack
 
@@ -63,17 +76,23 @@ the managed **Snowflake Sink Connector** lands the same events in **Snowflake**
 | Stream            | Confluent Cloud (Kafka)       | `/confluent` (Terraform) |
 | Live tap          | Always-on Fargate consumer (FastAPI + `confluent-kafka`) → SSE | `/consumer` (+ `/infra`) |
 | Sink              | Confluent Snowflake Sink Connector (Snowpipe Streaming) | `/confluent` (Terraform) |
-| Warehouse         | Snowflake (analytics)         | `/snowflake` (Terraform) |
+| Warehouse         | Snowflake (analytics views)   | `/snowflake` (Terraform) |
 | Serving + hosting | ECS/Fargate + ALB, S3, CloudFront | `/infra` (Terraform) |
 | UI                | Static HTML/JS                | `/web`       |
 
+## Repo layout
 
-## Theoretical Considerations
+Each module has its own README with setup and deploy steps.
 
-- Why partition by `engine_id` (per-engine ordering) and how partition count affects parallelism.
-- Schema Registry + a schema-evolution change you made and what broke / didn't.
-- Snowflake Sink Connector config: batching, and why the warehouse view is near-real-time, not sub-second (and that Snowpipe Streaming / a direct Kafka tap is the lower-latency option).
-- Consumer lag: what you saw and how you monitor it in production.
-- **Live view taps Kafka; analytics reads Snowflake — the production-faithful split (step 9).** Step 7 deliberately read *both* views from Snowflake — one backend, one query shape, far less to break in front of an interviewer — but that runs against the grain: Snowflake is a columnar analytical warehouse, so using it as a low-latency operational store for "latest row per engine" is the wrong tool. Snowpipe Streaming pushed that Snowflake-backed view to near-real-time (~3–30s), but the fully-managed connector's ~30s flush cap kept it short of truly "live." Step 9 closed the gap by **architecture, not by the connector**: the live path now reads straight from Kafka (own consumer group → in-memory latest-per-engine → SSE), sub-second and off the warehouse entirely, while Snowflake keeps the analytics it's actually good at.
-- **Snowflake *Stream* vs Snowpipe *Streaming*.** A *Stream* is a CDC change-feed object (drained by a TASK); *Snowpipe Streaming* is a low-latency row-based ingestion method. Easy to conflate — only the latter reduces ingest lag (it's what step 6 turns on).
-- **Consuming live from Kafka: stateless Lambda vs. persistent consumer.** Two ways to serve a live Kafka view — a stateless Lambda that `assign()`s partitions + `seek()`s to the high watermark and dedupes by key (scales to zero, but per-invoke connection overhead), or a persistent consumer holding state + pushing over WebSocket/SSE (always-on cost, but lower latency). **Step 9 took the latter** — the always-on Fargate consumer + SSE — trading scale-to-zero for sub-second freshness.
+- `producer/` — local Avro telemetry generator
+- `consumer/` — the live-tap FastAPI container (SSE + folded produce/query routes)
+- `confluent/` — Terraform: Kafka cluster, topic, Schema Registry, Snowflake sink connector
+- `snowflake/` — Terraform: warehouse, database, analytics views
+- `infra/` — Terraform: ECS/Fargate, ALB, S3, CloudFront, secrets
+- `web/` — the static site
+- `notes/` — design notes
+
+## Future improvements
+
+- **Schematization — typed columns.** Turn the sink's schematization on so it reads the Avro schema and auto-creates real typed columns instead of the single `RECORD_CONTENT` VARIANT.
+- **Dead-letter queue.** Arm the sink's `errors.*` knobs so poison records dead-letter instead of stopping the task, plus a redrive path to replay fixed records.
