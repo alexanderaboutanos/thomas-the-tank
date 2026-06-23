@@ -5,7 +5,8 @@ These three routes used to be the step-7 serving Lambda (infra/lambda/handler.py
 they fold into THIS FastAPI app as the Lambda + API Gateway are retired, so one
 always-on container serves everything:
 
-  POST /produce        produce one tick of Avro telemetry (all engines) to Kafka
+  POST /produce        produce one tick of Avro telemetry (all engines) to Kafka,
+                       rate-limited process-wide (see MIN_PRODUCE_INTERVAL_S)
   GET  /latest         live view: latest row per engine, read from Snowflake
   GET  /query?name=…   one of three canned, server-side analytics queries
 
@@ -34,9 +35,11 @@ read-only app-live identity the live consumer uses — that one has no topic WRI
 ACL, by design.
 """
 import asyncio
+import math
 import os
 import random
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -57,6 +60,16 @@ from fastapi.responses import JSONResponse
 HERE = Path(__file__).parent
 SCHEMA_FILE = HERE / "telemetry.avsc"
 NUM_ENGINES = int(os.environ.get("NUM_ENGINES", "5"))
+
+# Minimum wall-clock gap between actual produce ticks, process-wide. /produce is
+# public and unauthenticated, and every call writes NUM_ENGINES Avro messages to
+# Confluent Cloud (which the Snowflake sink then bills to ingest) — so a scripted
+# flood is a direct cost lever. Because the simulation is a single shared global
+# (one set of engines for all viewers), coalescing to at most one tick per interval
+# loses nothing: every viewer watches the same trains over SSE regardless of who
+# triggered the tick. The 1s default sits well under the page's 2s cadence, so a
+# real visitor never trips it, while any flood is capped to ~NUM_ENGINES msg/s.
+MIN_PRODUCE_INTERVAL_S = float(os.environ.get("MIN_PRODUCE_INTERVAL_SECONDS", "1.0"))
 
 router = APIRouter()
 
@@ -169,6 +182,18 @@ _kafka = None
 # interleaved flush()/state mutation would corrupt the per-engine walk.
 _produce_lock = threading.Lock()
 
+# Monotonic timestamp of the last produce tick; read/written only under _produce_lock.
+_last_produce_monotonic = None
+
+
+class _Throttled(Exception):
+    """Raised when /produce is called inside the cooldown window; the route turns it
+    into a 429. Carries the seconds the caller should wait before retrying."""
+
+    def __init__(self, retry_after):
+        super().__init__("produce rate limited")
+        self.retry_after = retry_after
+
 
 def _kafka_clients():
     """Build (and cache) the producer + Avro serializer from the environment."""
@@ -225,9 +250,11 @@ def _build_event(engine_id, state):
 
 
 def _produce_tick():
-    """Produce one reading for every engine; flush so this tick's delivery
-    errors are known before we respond. Blocking — call via `asyncio.to_thread`."""
-    producer, serialize, key_ser, topic = _kafka_clients()
+    """Produce one reading for every engine; flush so this tick's delivery errors
+    are known before we respond. Rate-limited process-wide (see
+    MIN_PRODUCE_INTERVAL_S) — raises _Throttled if called inside the cooldown.
+    Blocking — call via `asyncio.to_thread`."""
+    global _last_produce_monotonic
     errors = []
 
     def on_delivery(err, _msg):
@@ -235,6 +262,17 @@ def _produce_tick():
             errors.append(str(err))
 
     with _produce_lock:
+        # Cost gate: coalesce calls that arrive inside the cooldown into a 429,
+        # before touching Kafka at all. The window is measured from the previous
+        # tick's start, so a slow flush doesn't stack extra delay on the next call.
+        now = time.monotonic()
+        if _last_produce_monotonic is not None:
+            elapsed = now - _last_produce_monotonic
+            if elapsed < MIN_PRODUCE_INTERVAL_S:
+                raise _Throttled(MIN_PRODUCE_INTERVAL_S - elapsed)
+        _last_produce_monotonic = now
+
+        producer, serialize, key_ser, topic = _kafka_clients()
         produced = 0
         for engine_id in ENGINES:
             ENGINES[engine_id] = _step(ENGINES[engine_id])
@@ -277,7 +315,15 @@ async def query(name: str = Query(...)):
 
 @router.post("/produce")
 async def produce():
-    produced, topic, errors = await asyncio.to_thread(_produce_tick)
+    try:
+        produced, topic, errors = await asyncio.to_thread(_produce_tick)
+    except _Throttled as exc:
+        retry_after = max(1, math.ceil(exc.retry_after))
+        return JSONResponse(
+            status_code=429,
+            content={"error": "rate limited", "retry_after_seconds": retry_after},
+            headers={"Retry-After": str(retry_after)},
+        )
     body = {"produced": produced, "topic": topic}
     if errors:
         body["errors"] = errors
