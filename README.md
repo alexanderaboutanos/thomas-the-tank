@@ -2,57 +2,58 @@
 
 ![Thomas the Tank Engine emerging from a tunnel](web/thomas.png)
 
-A small train-IoT data pipeline — a hands-on exercise built for fun to get to grips with the
-Kafka, Confluent, and Snowflake stack, themed as the **North Western Railway** of the Island of Sodor.
+Hello, I'm Alexander and I love building software for people. 
 
-The simulated engines (Thomas, Edward, Henry, Gordon, James…) emit Avro telemetry to
-**Confluent Cloud (Kafka)**, keyed by `engine_id`. From there the data forks into the
-**production-faithful split** — two read paths, each on the store that fits it:
+I built a train IoT data pipeline using the Kafka, Confluent, and Snowflake stack.
+Trains emit telemetry data (speed, location, etc.), those messages stream through Kafka (Confluent), they land in 
+a Snowflake database for analytics, and finally everything is visibile on an interactive webpage. Everything is hosted in the cloud. 
+
+I loved Thomas the Tank Engine as a kid, so the theme was a given... the North Western Railway on the Island of Sodor...
+
+The website is found here: https://d3seigtcpso2da.cloudfront.net
+
+## Architecture
+
+![North Western Railway streaming data pipeline — engine telemetry into a three-partition Kafka topic on Confluent Cloud, fanned out to two independent consumer groups: a Snowflake Sink Connector (analytics) and an always-on ECS Fargate live tap that streams to the web view over SSE; analytics queries round-trip through that task to Snowflake.](web/architecture.svg)
+
+
+### Producer
+Navigate to the webpage and pull the lever on the Master Regulator. Now the trains are moving! Behind the scenes, a python script is now running and emiting dummy telemetry data every 2 seconds until it's told to stop. Rather than using JSON, it emits Avro... for 2 reasons: it's faster and it gives a firm data contract. The telemetry data will continue to flow until you pul the lever and tell the trains to stop.
+
+### Stream
+The telemetry data is emitted to an Apache Kafka topic, managed by Confluent. There are three partitions in this topic and the message key used is the `engine_id`, which is the name of the train (Thomas, Henry, etc.). Messages land in the appropriate partition and are consumed by 2 consumer groups...
+
+### Consumer Groups
+There are 2 groups consuming this data....
+#### A - Snowflake Sink - Analytics 
+
+the managed **Snowflake Sink Connector** lands the same events in **Snowflake**
+  via **Snowpipe Streaming** (~3–30s), where canned aggregate queries (`/query`) roll
+  them up on demand.
+
+#### B - Fargate Container - Live View
+
+
 
 - **Live view** — a small **always-on Fargate container** taps Kafka under its own consumer
   group, holds a latest-per-engine map in memory, and streams each fresh reading to the browser
   over **Server-Sent Events** (`/stream`) — straight off the topic, no warehouse in the path.
-- **Analytics** — the managed **Snowflake Sink Connector** lands the same events in **Snowflake**
-  via **Snowpipe Streaming** (~3–30s; see step 6), where canned aggregate queries (`/query`) roll
-  them up on demand.
+- **Analytics** — 
 
-A train-themed on/off switch in the UI drives `POST /produce` on a ~2s tick, so the whole demo
-runs in the cloud — no laptop needed. Everything is served **same-origin**: **CloudFront** fronts
-the static page (**S3**) and proxies `/produce`, `/query`, and the `/stream` SSE to the Fargate
-container (behind an **ALB**) — no API keys, no CORS, no mixed content. (The earlier step-7 design
-read *both* views from Snowflake through a **Lambda + API Gateway**; step 9 retired that, moving
-the live path onto Kafka and folding the serving routes into the one container.)
 
-## Live demo
+### Webpage
+**Web UI + API** — https://d3seigtcpso2da.cloudfront.net — one CloudFront origin: the static site plus same-origin routes `POST /produce`, `GET /latest`, `GET /query?name=…`, and the live SSE stream `GET /stream`. 
 
-The step-9 serving layer is deployed in `us-east-2`:
 
-- **Web UI + API** — https://d3seigtcpso2da.cloudfront.net — one CloudFront origin: the static site plus same-origin routes `POST /produce`, `GET /latest`, `GET /query?name=…`, and the live SSE stream `GET /stream`. (The step-7 API Gateway is retired — there's no separate API host.)
+~~~~~~~~~~~~
 
-(The URL is environment-specific; re-deploying `/infra` prints a fresh one via `terraform output web_url`.)
+- need a short list of endpoints
+- deployed on us-east-2
+- 
 
-## Architecture
 
-```mermaid
-flowchart LR
-    W["Browser<br/>S3 + CloudFront UI"]
-    subgraph SVC["Always-on Fargate container · FastAPI<br/>(behind ALB ← CloudFront, same-origin)"]
-      P["POST /produce"]
-      Q["GET /query"]
-      LV["live Kafka consumer<br/>→ GET /stream (SSE)"]
-    end
-    W -->|"switch on → per ~2s tick"| P
-    P -->|"Avro, keyed by engine_id"| K["Confluent Cloud<br/>Kafka + Schema Registry"]
-    K -->|"managed Sink Connector<br/>(Snowpipe Streaming)"| S["Snowflake<br/>(analytics)"]
-    K -->|"own consumer group<br/>latest-per-engine"| LV
-    LV -->|"live view (SSE)"| W
-    W -->|"GET /query?name=…"| Q
-    Q -->|SQL| S
-    S -->|rows| Q
-```
+~~~~~~~~~~~
 
-Two read paths off one topic: the **live view** streams straight from Kafka (sub-second, SSE),
-while **analytics** reads Snowflake (rolled up from the same events via Snowpipe Streaming).
 
 ## Stack
 
@@ -66,50 +67,6 @@ while **analytics** reads Snowflake (rolled up from the same events via Snowpipe
 | Serving + hosting | ECS/Fargate + ALB, S3, CloudFront | `/infra` (Terraform) |
 | UI                | Static HTML/JS                | `/web`       |
 
-## Tools needed
-
-- A **Confluent Cloud** account and a **Snowflake** trial 
-- An **AWS** account.
-- CLIs/tools: `python3`, `terraform`, `aws` CLI, `confluent` CLI (optional but handy), `git`.
-- Credentials live in your shell / a secrets store — **never in this repo** (see `.gitignore`).
-
-## Build order
-
-Build the unfamiliar foundation first; the AWS UI last. Each step is its own directory; the checkbox is its status, and ← marks where we are.
-
-- [x] **1. Accounts** — create the Confluent + Snowflake accounts.
-- [x] **2. One message flowing** (`/producer`) — spin up a Basic cluster + a `sodor-telemetry` topic, then run `producer.py` with plain JSON.
-- [x] **3. Codify the Confluent Terraform** (`/confluent`) — by-hand setup translated to IaC (provider pin, producer + admin service accounts, API keys, ACL, outputs); imported the surviving environment and recreated the cluster/topic/identities under Terraform. Topic partitioned at 3.
-- [x] **4. Avro + Schema Registry** (`/producer`, `/confluent`) — upgraded the producer off plain JSON to a registered Avro schema; this sets up the schema-evolution experiments.
-- [x] **5. The Snowflake hop** (`/snowflake`, then the connector in `/confluent`) — set up the Snowflake DB/table + a key-pair user, then configure the managed Snowflake Sink Connector. Confirm rows land in the table. *(Verified: 150/150 produced messages landed in `TELEMETRY_RAW`, all 5 engines surfaced in `TELEMETRY_LATEST`.)*
-- [x] **6. Snowpipe Streaming** (`/confluent`, `/snowflake`) — upgraded the managed sink connector from classic file-based **Snowpipe** to **Snowpipe Streaming**. Verified: `snowflake.ingestion.method = SNOWPIPE_STREAMING`, rows land continuously and exactly-once (two-VARIANT shape — schematization left off, view untouched), grants trimmed (`CREATE STAGE` dropped). Measured freshness **~3–30s (avg ~15s)** — beats classic's minute+, but *not* single-digit: the fully-managed connector pins the streaming client-lag at its 30s default and won't let us lower it (`snowflake.streaming.max.client.lag` / `enable.single.buffer` are silently dropped; `buffer.flush.time` is bypassed by its locked single-buffer mode).
-    - **Resolution (decided):** stop chasing single-digit *inside* Snowflake. The merged live-tap (step 9) routes the **live view around Snowflake entirely**, so Snowpipe Streaming stays — now serving **analytics only**, where ~15s freshness is irrelevant. The gap is closed by architecture, not by this connector.
-- [x] **7. Serving layer + UI** (`/infra` + `/web`) — stand up the cloud serving layer so the whole demo runs without a laptop. One **container-image Lambda** (carries `confluent-kafka` for `/produce` **and** `snowflake-connector-python` for the Snowflake reads — this unblocks the `handler.py` stub), behind API Gateway as three routes, plus the static site:
-    - `POST /produce` — produce one tick of Avro telemetry for all engines to Kafka (reuses `producer.py`'s logic; holds the Confluent + Schema Registry creds from Secrets Manager). Replaces running `producer.py` on your laptop.
-    - `GET /latest` — **the live view: `SELECT` latest-per-engine from Snowflake** (`ROW_NUMBER() … PARTITION BY engine_id ORDER BY timestamp DESC`, `rn = 1`). Same query shape as the analytics routes; un-stubs `handler.py`.
-    - `GET /query?name=…` — run one of three **canned, server-side** analytics queries against Snowflake (never raw SQL from the browser): **(1) speed leaderboard**, **(2) fleet throughput per minute**, **(3) doors-open-while-moving**.
-    - **Web UI** — a train-themed **on/off master switch**: while on, the browser calls `/produce` on a ~2s interval and polls `/latest`; three **query buttons** call `/query`. Per-viewer — closing the tab stops production, so it scales to zero with no runaway cost on a public URL. (Theme/polish — map, lever switch, engine faces — is a later pass; wire the plumbing first.)
-    - **Status — live in `us-east-2` and verified end-to-end.** All three routes return 200 (`POST /produce`, `GET /latest`, `GET /query?name=…`); the UI switch + analytics buttons work in-browser. CORS is locked to the CloudFront origin (tracked from the distribution in `infra/api.tf`, so it never goes stale).
-    - **Superseded by step 9:** these three routes have been **folded into step 9's ECS service** (one FastAPI container, `consumer/serving.py`), retiring the Lambda + API Gateway + CORS — see the folding note there.
-- [ ] **8. Play** — evolve the schema (watch the Schema Registry compatibility check), watch consumer lag, reason about partitioning by `engine_id`. This is the fun part — tinker and see what breaks.
-- [x] **9. Live Kafka tap — closes step 6's freshness gap** (`/consumer` new, `/confluent`, `/infra`, `/web`) — serve the live view **straight from Kafka instead of Snowflake**, the production-faithful split (Kafka → UI for live; Snowflake → analytics). Merges old steps 6 + 9: a new **always-on Fargate consumer** (Python, `confluent-kafka`) joins the topic under its **own consumer group** — independent of the Snowflake sink's group, the Kafka-vs-SQS fan-out made physical — holds an in-memory **latest-per-engine** map, and pushes updates to the browser over **SSE** (`EventSource`) behind an **ALB**. Snapshot-on-connect + a ~20s heartbeat handle quiet engines and idle-timeouts.
-    - **Folding decision (decided):** the always-on task already gives up scale-to-zero, so the **step-7 serving Lambda + API Gateway are absorbed into this one ECS service** — `/produce`, `/latest`, `/query` move into the same FastAPI container as `/stream`. Net simplification: delete API Gateway, the serving Lambda, its ECR repo, and **all CORS** (one CloudFront origin). Tradeoffs owned: one shared failure domain, and blocking calls (Snowflake, Kafka) must be offloaded off the event loop (`asyncio.to_thread`) so they don't stall SSE. `/produce` also gets cleaner — a persistent process drops the Lambda's synchronous `flush()` hack.
-    - **Key decisions:** `confluent-kafka` (reuse + first-class Avro, *not* pure-Python `aiokafka`). **CloudFront fronts the ALB** — route `/stream*`, `/produce`, `/latest`, `/query`, `/healthz` to the ALB origin with caching disabled; reuses the existing TLS cert, no domain, no mixed-content, no CORS. **Default VPC + public-subnet tasks w/ public IP** (no NAT cost); ALB SG locked to CloudFront's managed prefix list. Single task + stable `group.id` now (per-instance unique group = the HA fan-out path, documented not built). New Confluent **`app-live`** service account mirrors `app-connector` (DESCRIBE cluster, READ topic, READ group prefix `sodor-live-`, SR DeveloperRead) — read-only.
-    - **Build order:** **(0) ✓** Confluent `app-live` SA/keys/ACLs + out-of-band consumer secret → **(1) ✓** `/consumer` app validated **locally** (local producer + a localhost page — no mixed-content) → **(2) ✓** containerize (ECR + `build_and_push.sh`) → **(3) ✓** `/infra` ECS/Fargate + ALB + SGs + CloudFront app behaviors, **retired `api.tf` + `lambda.tf`** (folded `/produce`,`/latest`,`/query` into the container) → **(4) ✓** `/web` swap polling for `EventSource` (same-origin) → (5) docs.
-    - **Progress — (0)+(1)+(2)+(3)+(4) done.** `app-live` applied (read-only consumer identity; the `sodor-live-` group-prefix ACL deliberately covers both today's stable `group.id` and the future per-instance HA group). `/consumer` is a FastAPI app: a librdkafka consumer in its own daemon thread → in-memory latest-per-engine map → SSE on `/stream` (snapshot-on-connect + per-engine `update` events + ~20s heartbeat), plus `/healthz` and a localhost test page. Verified locally end-to-end: `producer.py` → Kafka (own group `sodor-live-consumer`) → SSE → browser — 1 snapshot + 30 `update` frames across all 5 engines, Avro decoded to typed fields. **(2) containerized:** `consumer/Dockerfile` (`python:3.12-slim` + uvicorn, non-root, `ca-certificates` for the broker's TLS, `exec` so SIGTERM reaches uvicorn → graceful lifespan shutdown stops the consumer thread) + a `.dockerignore` that keeps `.venv`/`.env` out of the image; new `infra/consumer.tf` ECR repo (`sodor-railway-live`, immutable, 5-image lifecycle) with a content-hash image tag and a `build_push` reusing the now-generic `build_and_push.sh` (the Lambda + consumer images share it), surfaced as the `consumer_image_uri` output. Verified: `docker build --platform linux/amd64` clean; a dummy-env container boots — `/healthz` 200, `/` serves the test page, and an unreachable broker logs-but-doesn't-crash (the resilience the ALB probe relies on); `terraform validate` passes. **(3) infra written:** the serving routes folded into the container (`consumer/serving.py` — an `APIRouter` ported from the Lambda's `handler.py`, env-only config, blocking Kafka/Snowflake calls offloaded with `asyncio.to_thread`); new `infra/{network,alb,ecs}.tf` stand up a single always-on Fargate task behind an ALB (target SG ⟵ ALB SG ⟵ CloudFront managed prefix list, public-subnet task w/ public IP, no NAT), the task def injecting **three** Secrets Manager secrets (snowflake + producer-confluent + read-only `confluent-live`) as env vars; `site.tf` adds the ALB as a second CloudFront origin with caching-disabled behaviors for `/stream*`,`/produce`,`/latest`,`/query`,`/healthz` (default still → S3); `api.tf`+`lambda.tf`+`ecr.tf`+`infra/lambda/` retired (all CORS gone). `terraform validate` passes. **(4) done (uncommitted, in `web/index.html`):** swapped `/latest` polling for a same-origin `EventSource("/stream")` and deleted the `API_BASE` execute-api URL, so `/produce`,`/query`,`/stream` are all relative — no CORS, and the page survives API Gateway's retirement. **Step 9 is live on personal (319120789796, `us-east-2`)** at https://d3seigtcpso2da.cloudfront.net — all five routes (`/healthz`, `/produce`, `/latest`, `/query`, `/stream`) verified 200. **Decision (2026-06-22): migrate AWS corpa→personal (319120789796) by applying step 9 FRESH on personal — do NOT apply step 9 to corpa** (step 9 retires step 7, so a fresh personal apply collapses migrate + deploy into one). Clean path: `terraform destroy` step-7 on corpa (avoid orphan billing — local `infra/terraform.tfstate` is corpa-bound) → pin `provider "aws" { profile = "personal" }` in `/infra` **only** → recreate the 3 secrets on personal (snowflake from `snowflake/rsa_key_connector.p8` + `/snowflake` outputs; confluent + confluent-live from `/confluent` outputs) → `terraform apply` → re-upload `web/`. Confluent + Snowflake SaaS are unaffected (only the AWS Secrets Manager copies are recreated; the managed sink connector lives in Confluent); new account ⇒ new CloudFront URL (cosmetic). **Migration done 2026-06-22:** step-7 destroyed on corpa, step 9 applied fresh on personal, the 3 secrets recreated on personal and the corpa copies deleted. **(5) docs done:** the intro, a re-added Architecture mermaid, and the Stack table now describe the deployed Kafka-SSE/Snowflake split. **Step 9 complete.**
-    - **Cost owned:** first piece that **doesn't scale to zero** — one small Fargate task ~a few $/mo always-on (scale to 0 between demos → live view dark). Optional later: a log-compacted `…-latest` topic for instant full-state bootstrap on consumer restart; a Snowflake **Stream + TASK** to showcase CDC.
-- [ ] **10. Schematization — typed columns** (`/confluent`, `/snowflake`) — an enhancement to the step-6 connector; do it any time after step 6 (it pairs naturally with step 8's schema-evolution play). Step 6 deliberately left schematization **off**, so every message still lands in the `RECORD_CONTENT` VARIANT. Flip the managed connector's schematization **on** (verify the exact key against current Confluent docs — e.g. `snowflake.enable.schematization`, which needs a schema-based value converter) so the Sink reads the Avro schema and **auto-creates real typed columns** (`ENGINE_ID STRING`, `SPEED_KMH FLOAT`, …) — no VARIANT blob. The flatten-from-VARIANT views collapse to bare column refs: that seam is centralized in `TELEMETRY_FLAT` (`/snowflake/analytics.tf`), so it's a one-line change there and `TELEMETRY_LATEST` + the analytics views + the Lambda follow unchanged. Trade-off to own out loud: it **couples the Snowflake table to the Avro schema**, so a schema-evolution change (step 8) now shifts columns under you — which is exactly what makes it a good experiment to run alongside that step.
-- [ ] **11. Dead-letter queue — arm the sink + add a reject path** (`/confluent`, `/snowflake`) — an enhancement to the step-6 connector. The DLQ topic is already *permitted* but not *armed*: `confluent/main.tf` grants the connector `CREATE`/`WRITE` on the `dlq-lcc-` prefix (lines 288–322), but the connector config sets **none** of the `errors.*` knobs, so `errors.tolerance` defaults to **`NONE`** — the task **stops on the first poison record** instead of dead-lettering it. Arm it: `"errors.tolerance" = "all"`, name the topic explicitly (`"errors.deadletterqueue.topic.name"`), preserve the failing record's context (`"errors.deadletterqueue.context.headers.enable" = "true"`), and turn on `"errors.log.enable"`. (Verify the exact keys against current Confluent managed-connector docs — some `errors.*` knobs are silently dropped by managed connectors, the same gotcha as step 6's client-lag.) **A DLQ is a black hole without a watcher**: the real work is the *redrive* path — alert on DLQ depth (non-empty = malformed data upstream) plus a small reprocess consumer to replay fixed records. Pairs with **step 10**: once schematization is on, rows that don't fit the typed columns need somewhere to go — add a Snowflake **reject/quarantine table** (`ON_ERROR = CONTINUE` + an errors table) as the warehouse-side equivalent. Ideal DLQ seams in this pipeline, in priority order: **(1)** the sink connector (here — Kafka-native, highest leverage); **(2)** the ingest edge *if* `/produce` ever goes async (API GW → **SQS** → Lambda gives a natural redrive DLQ; today's synchronous invoke can only return 502); **(3)** the warehouse reject table (with step 10); **(4)** the step-9 live Kafka consumer's own poison-pill topic, so one bad record can't wedge the partition.
-
-> Tip: stand the Confluent + Snowflake resources up **by hand once** (console/CLI) to
-> learn what each piece is, *then* codify them into the Terraform here. Writing IaC for
-> resources you don't yet understand is painful; codifying ones you just configured is fast.
-
-## Secrets
-
-- `.gitignore` excludes `.env`, `*.tfvars`, `*.tfstate`, key files, and Terraform/build artifacts.
-- Put the Snowflake creds the serving container needs in **AWS Secrets Manager / SSM**, not in code.
-- Each subdir has a `.env.example` / `terraform.tfvars.example` — copy, fill in, and keep the real one out of git.
 
 ## Theoretical Considerations
 

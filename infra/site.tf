@@ -35,6 +35,16 @@ resource "aws_s3_object" "thomas" {
   content_type = "image/png"
 }
 
+# Architecture diagram for the About tab. index.html references it as
+# "architecture.svg"; the same self-contained file is embedded in the README.
+resource "aws_s3_object" "architecture" {
+  bucket       = aws_s3_bucket.site.id
+  key          = "architecture.svg"
+  source       = "${path.module}/../web/architecture.svg"
+  etag         = filemd5("${path.module}/../web/architecture.svg")
+  content_type = "image/svg+xml"
+}
+
 # Origin Access Control: CloudFront reads the bucket; the bucket stays private.
 resource "aws_cloudfront_origin_access_control" "site" {
   name                              = "${local.name_prefix}-site"
