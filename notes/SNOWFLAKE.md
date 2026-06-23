@@ -116,7 +116,7 @@ That "files vs rows" distinction is the root cause of every pro and con below.
 
 | Your situation                                                 | Use                    |
 | -------------------------------------------------------------- | ---------------------- |
-| Backfills, historical loads, large scheduled batches           | `**COPY` (Classic)**   |
+| Backfills, historical loads, large scheduled batches           | **`COPY` (Classic)**   |
 | Periodic file drops, minutes of latency acceptable, serverless | **Snowpipe (Classic)** |
 | Continuous events, Kafka source, seconds of latency needed     | **Snowpipe Streaming** |
 

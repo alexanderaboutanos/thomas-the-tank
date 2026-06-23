@@ -38,7 +38,7 @@ How do I determine # of partitions within a topic? Balance four forces:
 I have some messages in a topic that I want deleted. They're bad or stale. How do I purge them?
 - use the delete records api call. but what does this do?
 - this moves the log start offset of each partition to whatever value you give it. If you move it to the current offset, the consumers will have nothing to consume and the records will therefore be effectively deleted. done.
-- at this point, we're still technically waiting for Kafka to actually remove the messages entirely from the cluster, and that occurs when enough messages build up to deserve a full "segment" delete. But all this happens in the backgorund. After the offset moves, the messages are effectively purged.
+- at this point, we're still technically waiting for Kafka to actually remove the messages entirely from the cluster, and that occurs when enough messages build up to deserve a full "segment" delete. But all this happens in the background. After the offset moves, the messages are effectively purged.
 
 How long should messages be retained in a topic?
 - well, we pay for storage on a cluster, so if messages build up and sit, the bill could get very large very fast. So set it low?
@@ -55,7 +55,7 @@ What is tiered storage in a cluster?
 - Consumers read either tier transparently, so you can keep a long retention window without paying for expensive local disk.
 
 How is Kafka different from SQS?
-- one way is that a consumer reading a message from a kafka topic does not consume and destroy the message. Instead, once a consumer reads a message, it just moves it's partiular offset forward. this means another *consumer group* can be reading on the same exact partition and have a totally different offset. So, a message will stay in a partition until it expires (as determined elsewhere by policy). This is different than SQS, where a message is read and then destroyed.
+- one way is that a consumer reading a message from a kafka topic does not consume and destroy the message. Instead, once a consumer reads a message, it just moves its particular offset forward. this means another *consumer group* can be reading on the same exact partition and have a totally different offset. So, a message will stay in a partition until it expires (as determined elsewhere by policy). This is different than SQS, where a message is read and then destroyed.
 
 
 ## Avro
@@ -68,5 +68,5 @@ How is Kafka different from SQS?
 ## Confluent
 
 - holds the Kafka streaming cluster, the topic, the partitions, etc.
-- also holds the schema registry, a collection of schemas (payload blueprints for messages) that both the produer and the consumer use.
+- also holds the schema registry, a collection of schemas (payload blueprints for messages) that both the producer and the consumer use.
 
