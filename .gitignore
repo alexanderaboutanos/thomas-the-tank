@@ -17,7 +17,8 @@ rsa_key*
 *.tfstate
 *.tfstate.*
 # Saved plan output — an ephemeral build artifact that can embed variable values.
-tfplan
+# tfplan* also catches suffixed variants (e.g. tfplan-s3).
+tfplan*
 *.tfplan
 crash.log
 crash.*.log
