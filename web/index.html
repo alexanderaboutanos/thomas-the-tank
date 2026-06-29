@@ -95,8 +95,12 @@
       font-size: .62rem; font-weight: 700; letter-spacing: .04em; text-transform: none;
       padding: .12rem .55rem; border-radius: 999px; background: rgba(29,78,137,.12); color: var(--nwr-blue);
     }
-    .internals-sub { margin: 0 0 .9rem; font-size: .8rem; color: #6b7280; font-style: italic; }
-    .internals-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .8rem; }
+    /* Outer stack: scalar row, then the units label, then the units row — each row
+       is its own auto-fit grid so its cards stretch to fill the width. (A single
+       shared grid with a full-width `grid-column: 1 / -1` label kept auto-fit from
+       collapsing the surplus tracks, leaving the cards huddled with dead space.) */
+    .internals-grid { display: grid; gap: .8rem; }
+    .internals-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .8rem; }
     .stat { background: #faf8f1; border: 1px solid #eee; border-radius: 8px; padding: .6rem .75rem; }
     .stat .k { font-size: .6rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #6b7280; }
     .stat .v { font-size: 1rem; font-weight: 700; color: var(--nwr-blue-dark); font-variant-numeric: tabular-nums; word-break: break-all; line-height: 1.25; margin-top: .15rem; }
@@ -104,7 +108,7 @@
     /* Per-partition / per-shard cards: one ordering unit each, accented so they
        read as the "fan-out" group distinct from the stream-level scalars above. */
     .stat.unit { border-left: 3px solid var(--nwr-blue); }
-    .internals-units-label { grid-column: 1 / -1; margin: .2rem 0 -.2rem; font-size: .62rem;
+    .internals-units-label { margin: .1rem 0 -.2rem; font-size: .62rem;
       font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #6b7280; }
 
     /* Live-tap badge in the live-view header. Tracks DATA freshness, not just the
@@ -416,7 +420,6 @@
       <div class="panel">
         <h2>Stream internals <span class="internals-backend" id="internalsBackend">Confluent Kafka</span></h2>
         <div class="body">
-          <p class="internals-sub" id="internalsSub"></p>
           <div class="internals-grid" id="internalsGrid">
             <p class="muted">reading the live machinery…</p>
           </div>
@@ -595,35 +598,34 @@
     const INTERNALS = {
       kafka: {
         label: "Confluent Kafka",
-        sub: "Kafka’s machinery — each partition’s offset is the twin of a Kinesis shard’s sequence number.",
         fields: m => [
           ["Topic",          m.topic,          ""],
           ["Consumer group", m.group_id,       "the live tap’s group"],
-          ["Messages seen",  m.messages_total, "this session"],
+          ["Messages seen",  m.messages_total, "since consumer start"],
+          ["Running since",  fmtSince(m.started_at), fmtUptime(m.started_at)],
         ],
         unitsLabel: "Partitions — one offset each",
         units: m => (m.partitions || []).map(p => ({
           k: "Partition " + p.partition,
           v: p.offset,
-          hint: "offset — position in this partition",
+          hint: "",
         })),
       },
       kinesis: {
         label: "AWS Kinesis",
-        sub: "Kinesis’s machinery — each shard’s sequence number is the twin of a Kafka partition’s offset.",
         fields: m => [
           ["Stream",        m.stream_name,   ""],
           ["Iterator type", m.iterator_type, "where each shard starts ≈ auto.offset.reset"],
-          ["Records seen",  m.records_total, "this session"],
+          ["Records seen",  m.records_total, "since consumer start"],
+          ["Running since", fmtSince(m.started_at), fmtUptime(m.started_at)],
         ],
         unitsLabel: "Shards — one sequence number each",
         units: m => (m.shards || []).map(s => ({
           k: "Shard " + shortShard(s.shard_id),
           v: s.sequence_number,
           // iterator age is the live, per-shard bit (≈ that partition's consumer lag);
-          // fall back to naming the value when a shard hasn't reported yet.
-          hint: (s.millis_behind_latest == null ? "" : s.millis_behind_latest + " ms behind the edge")
-                || "sequence number — position in this shard",
+          // leave it blank when a shard hasn't reported rather than repeating a static label.
+          hint: s.millis_behind_latest == null ? "" : s.millis_behind_latest + " ms behind the edge",
         })),
       },
     };
@@ -632,11 +634,30 @@
       return (v === null || v === undefined || v === "") ? "—" : v;
     }
 
+    // "Messages/records seen" counts over the consumer process's whole life, not a
+    // per-view session — so anchor it with when that process started. A recent time
+    // and small uptime is the visible tell that the consumer (or its ECS task) was
+    // just recycled and the count reset to zero. started_at is epoch seconds.
+    function fmtSince(epoch) {
+      return epoch == null ? "—" : new Date(epoch * 1000).toLocaleTimeString();
+    }
+
+    function fmtUptime(epoch) {
+      if (epoch == null) return "";
+      let s = Math.max(0, Math.floor(Date.now() / 1000 - epoch));
+      const h = Math.floor(s / 3600); s -= h * 3600;
+      const m = Math.floor(s / 60);   s -= m * 60;
+      const parts = [];
+      if (h) parts.push(h + "h");
+      if (h || m) parts.push(m + "m");
+      parts.push(s + "s");
+      return "up " + parts.join(" ");
+    }
+
     async function pollInternals() {
       const src = currentSource;
       const def = INTERNALS[src] || INTERNALS.kafka;
       document.getElementById("internalsBackend").textContent = def.label;
-      document.getElementById("internalsSub").textContent = def.sub;
       const grid = document.getElementById("internalsGrid");
       try {
         const res = await fetch("/internals?source=" + encodeURIComponent(src));
@@ -650,13 +671,13 @@
           `<div class="stat${cls ? " " + cls : ""}"><div class="k">${k}</div>` +
           `<div class="v">${fmtStat(v)}</div>` +
           (hint ? `<div class="hint">${hint}</div>` : "") + `</div>`;
-        const scalars = def.fields(m).map(([k, v, hint]) => card(k, v, hint, ""));
+        const scalars = def.fields(m).map(([k, v, hint]) => card(k, v, hint, "")).join("");
         const units = def.units(m);
-        const unitCards = units.length
-          ? [`<div class="internals-units-label">${def.unitsLabel}</div>`]
-              .concat(units.map(u => card(u.k, u.v, u.hint, "unit")))
-          : [];
-        grid.innerHTML = scalars.concat(unitCards).join("");
+        const unitsBlock = units.length
+          ? `<div class="internals-units-label">${def.unitsLabel}</div>` +
+            `<div class="internals-row">${units.map(u => card(u.k, u.v, u.hint, "unit")).join("")}</div>`
+          : "";
+        grid.innerHTML = `<div class="internals-row">${scalars}</div>` + unitsBlock;
       } catch (err) {
         if (src === currentSource) grid.innerHTML = `<p class="muted">stream internals unavailable — see the console.</p>`;
         console.error("internals poll failed", err);

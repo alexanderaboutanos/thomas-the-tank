@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 import threading
+import time
 
 from confluent_kafka import Consumer, KafkaError
 from confluent_kafka.schema_registry import SchemaRegistryClient
@@ -128,6 +129,10 @@ def run_consumer(state, cfg, stop_event):
     consumer.subscribe([cfg.topic])
     log.info("live consumer subscribed to %s as group %s", cfg.topic, cfg.group_id)
     messages_total = 0
+    # When THIS consumer thread started — the anchor for messages_total, which
+    # counts over the process's life (not a per-view session). A task recycle
+    # restarts the thread and zeroes the count; started_at makes that legible.
+    started_at = time.time()
     # The live tap reads all of the topic's partitions, each with its OWN
     # independent offset; keep the latest offset this consumer has reached per
     # partition so the panel shows every partition at once (one offset jumps around
@@ -169,6 +174,7 @@ def run_consumer(state, cfg, stop_event):
                         "topic": cfg.topic,
                         "group_id": cfg.group_id,
                         "messages_total": messages_total,
+                        "started_at": started_at,
                         "partitions": [
                             {"partition": p, "offset": partition_offsets[p]}
                             for p in sorted(partition_offsets)
@@ -216,6 +222,10 @@ def run_kinesis_consumer(state, cfg, stop_event):
 
     iterators = {}            # shard_id -> shard iterator; empty ⇒ (re)acquire
     records_total = 0
+    # When THIS consumer thread started — the anchor for records_total, which
+    # counts over the process's life (not a per-view session). A task recycle
+    # restarts the thread and zeroes the count; started_at makes that legible.
+    started_at = time.time()
     # Per-shard machinery for the Stream Internals panel — each shard, like a Kafka
     # partition, carries its OWN independent sequence number. Persists across poll
     # cycles (a shard that drew no records this poll keeps its last-known sequence
@@ -261,6 +271,7 @@ def run_kinesis_consumer(state, cfg, stop_event):
                         "stream_name": stream,
                         "iterator_type": "LATEST",
                         "records_total": records_total,
+                        "started_at": started_at,
                         "shards": [
                             {"shard_id": sid, **shard_state[sid]}
                             for sid in sorted(shard_state)
