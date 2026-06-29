@@ -15,7 +15,7 @@ on the Island of Sodor.
 
 ## Architecture
 
-![North Western Railway streaming data pipeline — engine telemetry into a three-partition Kafka topic on Confluent Cloud, fanned out to two independent consumer groups: a Snowflake Sink Connector (analytics) and an always-on ECS Fargate live tap that streams to the web view over SSE; analytics queries round-trip through that task to Snowflake.](web/architecture.svg)
+![North Western Railway streaming data pipeline — engine telemetry produced to two swappable stream backends side by side: a three-partition Kafka topic on Confluent Cloud (Avro) and a parallel three-shard AWS Kinesis Data Stream (JSON). A Snowflake Sink Connector reads the Kafka topic into Snowflake for analytics; an always-on ECS Fargate task taps both backends and streams to the web view over SSE, where a lever selects which backend is shown; analytics queries round-trip through that task to Snowflake.](web/architecture.svg)
 
 ### Producer
 
@@ -63,11 +63,11 @@ downstream (the live state, the SSE layer, the table) is transport-agnostic, so 
 wire format changes: **Avro + Schema Registry on Kafka, plain JSON on Kinesis** (JSON for
 practice; **AWS Glue Schema Registry** is the productionizing step).
 
-Two things keep the Kinesis work legible rather than hidden behind the abstraction:
+Two things surface the Kinesis internals rather than hiding them behind the abstraction:
 
 - a **Stream Internals** panel reads out the active backend's machinery in its own
   vocabulary — Kinesis: shard, sequence number, iterator age; Kafka: partition, offset,
-  group — so the toggle proves real, backend-specific knowledge, not "they look identical."
+  group — so each backend is visible on its own terms, not just identical-looking rows.
 - `notes/KINESIS.md` is a full Kafka↔Kinesis concept map.
 
 One deliberate departure rides along: unlike the rest of the app — which makes **no AWS
