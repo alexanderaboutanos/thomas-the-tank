@@ -71,8 +71,45 @@
     .panel .body { padding: 1rem; }
     .panel-status {
       padding: .6rem 1rem; background: #faf8f1; border-bottom: 1px solid #eee;
-      display: flex; justify-content: flex-end;
+      display: flex; justify-content: space-between; align-items: center; gap: .6rem; flex-wrap: wrap;
     }
+
+    /* ── Stream-backend lever: a compact segmented control (Confluent ↔ Kinesis).
+       Flips which backend's stream the live view tails — both run from boot, so
+       the toggle is just a reconnect against an already-warm stream. */
+    .source-control { display: inline-flex; align-items: center; gap: .5rem; }
+    .seg-cap { font-size: .6rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: #6b7280; }
+    .seg { display: inline-flex; border: 1px solid #d8d2c0; border-radius: 999px; overflow: hidden; background: #fff; }
+    .seg button {
+      font: inherit; font-size: .68rem; font-weight: 700; letter-spacing: .02em; cursor: pointer;
+      border: 0; background: transparent; color: var(--nwr-blue-dark);
+      padding: .3rem .8rem; transition: background .15s, color .15s;
+    }
+    .seg button + button { border-left: 1px solid #ece7d8; }
+    .seg button[aria-pressed="true"] { background: var(--nwr-blue); color: #fff; }
+    .seg button:not([aria-pressed="true"]):hover { background: #faf8f1; }
+
+    /* ── Stream Internals panel: the active backend's live machinery, in its own
+       native vocabulary, so the lever proves real backend-specific knowledge. */
+    .internals-backend {
+      font-size: .62rem; font-weight: 700; letter-spacing: .04em; text-transform: none;
+      padding: .12rem .55rem; border-radius: 999px; background: rgba(29,78,137,.12); color: var(--nwr-blue);
+    }
+    /* Outer stack: scalar row, then the units label, then the units row — each row
+       is its own auto-fit grid so its cards stretch to fill the width. (A single
+       shared grid with a full-width `grid-column: 1 / -1` label kept auto-fit from
+       collapsing the surplus tracks, leaving the cards huddled with dead space.) */
+    .internals-grid { display: grid; gap: .8rem; }
+    .internals-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .8rem; }
+    .stat { background: #faf8f1; border: 1px solid #eee; border-radius: 8px; padding: .6rem .75rem; }
+    .stat .k { font-size: .6rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #6b7280; }
+    .stat .v { font-size: 1rem; font-weight: 700; color: var(--nwr-blue-dark); font-variant-numeric: tabular-nums; word-break: break-all; line-height: 1.25; margin-top: .15rem; }
+    .stat .hint { font-size: .6rem; color: #98a0ac; margin-top: .15rem; }
+    /* Per-partition / per-shard cards: one ordering unit each, accented so they
+       read as the "fan-out" group distinct from the stream-level scalars above. */
+    .stat.unit { border-left: 3px solid var(--nwr-blue); }
+    .internals-units-label { margin: .1rem 0 -.2rem; font-size: .62rem;
+      font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #6b7280; }
 
     /* Live-tap badge in the live-view header. Tracks DATA freshness, not just the
        socket: `live` (fresh readings landing), `idle` (connected but quiet — trains
@@ -355,16 +392,38 @@
       <button class="tab" role="tab" id="tabbtn-about" aria-controls="tab-about" aria-selected="false" data-tab="about">About</button>
     </div>
 
-    <!-- Live view: latest reading per engine, streamed straight from Kafka over SSE -->
+    <!-- Live view: latest reading per engine, streamed over SSE from the SELECTED
+         backend (Confluent Kafka or AWS Kinesis — flip the lever in the status bar). -->
     <section class="tabpanel" id="tab-live" role="tabpanel" aria-labelledby="tabbtn-live">
       <div class="panel">
-        <div class="panel-status"><span class="stream-status off" id="streamStatus">connecting…</span></div>
+        <div class="panel-status">
+          <div class="source-control">
+            <span class="seg-cap">Backend</span>
+            <div class="seg" id="sourceToggle" role="group" aria-label="Stream backend">
+              <button type="button" data-source="kafka" aria-pressed="true">Confluent Kafka</button>
+              <button type="button" data-source="kinesis" aria-pressed="false">AWS Kinesis</button>
+            </div>
+          </div>
+          <span class="stream-status off" id="streamStatus">connecting…</span>
+        </div>
         <table>
           <thead>
             <tr><th>Engine</th><th>Speed (km/h)</th><th>Lat</th><th>Lon</th><th>Doors</th><th>Last seen (UTC)</th></tr>
           </thead>
           <tbody id="rows"><tr><td colspan="6" class="muted">connecting to the live tap…</td></tr></tbody>
         </table>
+      </div>
+
+      <!-- Stream Internals: the active backend's machinery in its own vocabulary,
+           polled from /internals. This is what makes the Kinesis skill legible —
+           not hidden behind the transport-agnostic event dict. -->
+      <div class="panel">
+        <h2>Stream internals <span class="internals-backend" id="internalsBackend">Confluent Kafka</span></h2>
+        <div class="body">
+          <div class="internals-grid" id="internalsGrid">
+            <p class="muted">reading the live machinery…</p>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -468,26 +527,164 @@
     }
     setInterval(refreshStreamStatus, 1000);
 
-    const es = new EventSource("/stream");
-    es.onopen  = () => { streamConnected = true;  refreshStreamStatus(); };
-    es.onerror = () => { streamConnected = false; refreshStreamStatus(); };
+    // ── Stream-backend lever: which backend the live view tails ───────────────
+    // Both backends run server-side from boot, so flipping the lever is just a
+    // reconnect — close the current EventSource, open one against ?source=<new>,
+    // and let snapshot-on-connect repaint from the new backend within a beat.
+    let currentSource = "kafka";
+    let es = null;
 
     // A snapshot is cached last-known state replayed on every (re)connect, so it
     // must NOT count as freshness — only a real `update` stamps lastUpdateAt.
-    es.addEventListener("snapshot", e => {
+    function onSnapshot(e) {
       engines.clear();
       for (const ev of JSON.parse(e.data)) engines.set(ev.engine_id, ev);
       renderLatest();
-    });
-
-    es.addEventListener("update", e => {
+    }
+    function onUpdate(e) {
       const ev = JSON.parse(e.data);
       engines.set(ev.engine_id, ev);
       lastUpdateAt = Date.now();
       refreshStreamStatus();
       renderLatest();
       flashRow(ev.engine_id);
-    });
+    }
+
+    function connectStream(src) {
+      if (es) es.close();                 // drop the old backend's stream
+      streamConnected = false;
+      lastUpdateAt = 0;
+      refreshStreamStatus();
+      es = new EventSource("/stream?source=" + encodeURIComponent(src));
+      es.onopen  = () => { streamConnected = true;  refreshStreamStatus(); };
+      es.onerror = () => { streamConnected = false; refreshStreamStatus(); };
+      es.addEventListener("snapshot", onSnapshot);
+      es.addEventListener("update", onUpdate);
+    }
+
+    function setSource(src) {
+      if (src === currentSource) return;
+      currentSource = src;
+      document.querySelectorAll("#sourceToggle button").forEach(b =>
+        b.setAttribute("aria-pressed", String(b.dataset.source === src)));
+      // Clear the other backend's rows so they don't linger; snapshot-on-connect
+      // plus the next produce tick repaint the newly selected backend's state.
+      engines.clear();
+      renderLatest();
+      connectStream(currentSource);
+      pollInternals();                    // refresh the panel for the new backend at once
+    }
+
+    document.querySelectorAll("#sourceToggle button").forEach(b =>
+      b.addEventListener("click", () => setSource(b.dataset.source)));
+
+    connectStream(currentSource);
+
+    // ── Stream Internals: the active backend's live machinery ─────────────────
+    // Polls /internals for whichever backend is selected and renders it in that
+    // backend's native vocabulary, with a one-line "≈ the other side" subtitle so
+    // the toggle teaches the Kafka↔Kinesis mapping instead of hiding it.
+    // Shorten "shardId-000000000000" to its index ("0") for a card title.
+    function shortShard(id) {
+      const m = /shardId-0*(\d+)$/.exec(id || "");
+      return m ? m[1] : (id || "—");
+    }
+
+    // Each backend: `fields` are stream-level scalars; `units` are one card per
+    // ordering unit — a Kafka partition (its offset) or a Kinesis shard (its
+    // sequence number), the two being direct twins. The same engines fan across
+    // the same count of units on either side (3 partitions ↔ 3 shards), so the
+    // panel reads 3-vs-3 instead of letting one jumping number stand in for all.
+    const INTERNALS = {
+      kafka: {
+        label: "Confluent Kafka",
+        fields: m => [
+          ["Topic",          m.topic,          ""],
+          ["Consumer group", m.group_id,       "the live tap’s group"],
+          ["Messages seen",  m.messages_total, "since consumer start"],
+          ["Running since",  fmtSince(m.started_at), fmtUptime(m.started_at)],
+        ],
+        unitsLabel: "Partitions — one offset each",
+        units: m => (m.partitions || []).map(p => ({
+          k: "Partition " + p.partition,
+          v: p.offset,
+          hint: "",
+        })),
+      },
+      kinesis: {
+        label: "AWS Kinesis",
+        fields: m => [
+          ["Stream",        m.stream_name,   ""],
+          ["Iterator type", m.iterator_type, "where each shard starts ≈ auto.offset.reset"],
+          ["Records seen",  m.records_total, "since consumer start"],
+          ["Running since", fmtSince(m.started_at), fmtUptime(m.started_at)],
+        ],
+        unitsLabel: "Shards — one sequence number each",
+        units: m => (m.shards || []).map(s => ({
+          k: "Shard " + shortShard(s.shard_id),
+          v: s.sequence_number,
+          // iterator age is the live, per-shard bit (≈ that partition's consumer lag);
+          // leave it blank when a shard hasn't reported rather than repeating a static label.
+          hint: s.millis_behind_latest == null ? "" : s.millis_behind_latest + " ms behind the edge",
+        })),
+      },
+    };
+
+    function fmtStat(v) {
+      return (v === null || v === undefined || v === "") ? "—" : v;
+    }
+
+    // "Messages/records seen" counts over the consumer process's whole life, not a
+    // per-view session — so anchor it with when that process started. A recent time
+    // and small uptime is the visible tell that the consumer (or its ECS task) was
+    // just recycled and the count reset to zero. started_at is epoch seconds.
+    function fmtSince(epoch) {
+      return epoch == null ? "—" : new Date(epoch * 1000).toLocaleTimeString();
+    }
+
+    function fmtUptime(epoch) {
+      if (epoch == null) return "";
+      let s = Math.max(0, Math.floor(Date.now() / 1000 - epoch));
+      const h = Math.floor(s / 3600); s -= h * 3600;
+      const m = Math.floor(s / 60);   s -= m * 60;
+      const parts = [];
+      if (h) parts.push(h + "h");
+      if (h || m) parts.push(m + "m");
+      parts.push(s + "s");
+      return "up " + parts.join(" ");
+    }
+
+    async function pollInternals() {
+      const src = currentSource;
+      const def = INTERNALS[src] || INTERNALS.kafka;
+      document.getElementById("internalsBackend").textContent = def.label;
+      const grid = document.getElementById("internalsGrid");
+      try {
+        const res = await fetch("/internals?source=" + encodeURIComponent(src));
+        const m = await res.json();
+        if (src !== currentSource) return;   // a flip raced us — let the next poll win
+        if (!m || Object.keys(m).length === 0) {
+          grid.innerHTML = `<p class="muted">no readings yet — pull the lever to wake the ${def.label} stream…</p>`;
+          return;
+        }
+        const card = (k, v, hint, cls) =>
+          `<div class="stat${cls ? " " + cls : ""}"><div class="k">${k}</div>` +
+          `<div class="v">${fmtStat(v)}</div>` +
+          (hint ? `<div class="hint">${hint}</div>` : "") + `</div>`;
+        const scalars = def.fields(m).map(([k, v, hint]) => card(k, v, hint, "")).join("");
+        const units = def.units(m);
+        const unitsBlock = units.length
+          ? `<div class="internals-units-label">${def.unitsLabel}</div>` +
+            `<div class="internals-row">${units.map(u => card(u.k, u.v, u.hint, "unit")).join("")}</div>`
+          : "";
+        grid.innerHTML = `<div class="internals-row">${scalars}</div>` + unitsBlock;
+      } catch (err) {
+        if (src === currentSource) grid.innerHTML = `<p class="muted">stream internals unavailable — see the console.</p>`;
+        console.error("internals poll failed", err);
+      }
+    }
+    setInterval(pollInternals, 2000);
+    pollInternals();
 
     // ── Master regulator: drives /produce while thrown ────────────────────────
     // No longer polls a view — the SSE stream above is always live. Each tick just
@@ -496,7 +693,7 @@
     let timer = null;
 
     async function produce() {
-      try { await fetch("/produce", { method: "POST" }); }
+      try { await fetch("/produce?source=" + encodeURIComponent(currentSource), { method: "POST" }); }
       catch (err) { console.error("produce failed", err); }
     }
 

@@ -35,6 +35,7 @@ read-only app-live identity the live consumer uses — that one has no topic WRI
 ACL, by design.
 """
 import asyncio
+import json
 import math
 import os
 import random
@@ -177,9 +178,11 @@ ENGINES = {
 }
 
 _kafka = None
+_kinesis = None  # cached (boto3 Kinesis client, stream_name); see _kinesis_client
 # Guard the producer + ENGINES random walk: `asyncio.to_thread` can run two
 # /produce calls (different viewers) on different threads at once, and an
-# interleaved flush()/state mutation would corrupt the per-engine walk.
+# interleaved flush()/state mutation would corrupt the per-engine walk. Shared by
+# BOTH backends — ENGINES is one global sim, so the Kinesis tick takes this lock too.
 _produce_lock = threading.Lock()
 
 # Monotonic timestamp of the last produce tick; read/written only under _produce_lock.
@@ -193,6 +196,22 @@ class _Throttled(Exception):
     def __init__(self, retry_after):
         super().__init__("produce rate limited")
         self.retry_after = retry_after
+
+
+def _enforce_rate_gate():
+    """Process-wide cost gate, shared by both backends. MUST be called while
+    holding _produce_lock. Coalesces calls that arrive inside the cooldown into a
+    429 (via _Throttled) before touching any backend at all. The window is measured
+    from the previous tick's START, so a slow flush/put doesn't stack extra delay on
+    the next call. One cadence across Kafka + Kinesis is fine — the regulator only
+    ever drives one source at a time."""
+    global _last_produce_monotonic
+    now = time.monotonic()
+    if _last_produce_monotonic is not None:
+        elapsed = now - _last_produce_monotonic
+        if elapsed < MIN_PRODUCE_INTERVAL_S:
+            raise _Throttled(MIN_PRODUCE_INTERVAL_S - elapsed)
+    _last_produce_monotonic = now
 
 
 def _kafka_clients():
@@ -228,6 +247,21 @@ def _kafka_clients():
     return _kafka
 
 
+def _kinesis_client():
+    """Build (and cache) the boto3 Kinesis client + stream name from the env.
+
+    Unlike the Kafka producer, there are NO keys here: boto3 authenticates from
+    the ambient credential chain — the ECS task role on AWS (IAM-scoped to the
+    stream ARN, see infra/kinesis.tf) and the dev's AWS_PROFILE locally. This is
+    the one deliberate AWS-at-runtime departure; see notes/KINESIS.md."""
+    global _kinesis
+    if _kinesis is None:
+        import boto3  # function-local: only the Kinesis path needs the SDK
+        client = boto3.client("kinesis", region_name=os.environ.get("AWS_REGION"))
+        _kinesis = (client, os.environ["KINESIS_STREAM_NAME"])
+    return _kinesis
+
+
 def _step(state):
     state["speed_kmh"] = max(0.0, state["speed_kmh"] + random.uniform(-5, 5))
     state["lat"] += random.uniform(-0.001, 0.001)
@@ -254,7 +288,6 @@ def _produce_tick():
     are known before we respond. Rate-limited process-wide (see
     MIN_PRODUCE_INTERVAL_S) — raises _Throttled if called inside the cooldown.
     Blocking — call via `asyncio.to_thread`."""
-    global _last_produce_monotonic
     errors = []
 
     def on_delivery(err, _msg):
@@ -262,15 +295,7 @@ def _produce_tick():
             errors.append(str(err))
 
     with _produce_lock:
-        # Cost gate: coalesce calls that arrive inside the cooldown into a 429,
-        # before touching Kafka at all. The window is measured from the previous
-        # tick's start, so a slow flush doesn't stack extra delay on the next call.
-        now = time.monotonic()
-        if _last_produce_monotonic is not None:
-            elapsed = now - _last_produce_monotonic
-            if elapsed < MIN_PRODUCE_INTERVAL_S:
-                raise _Throttled(MIN_PRODUCE_INTERVAL_S - elapsed)
-        _last_produce_monotonic = now
+        _enforce_rate_gate()  # 429s inside the cooldown before touching Kafka
 
         producer, serialize, key_ser, topic = _kafka_clients()
         produced = 0
@@ -290,6 +315,41 @@ def _produce_tick():
         producer.flush(5)
 
     return produced, topic, errors
+
+
+def produce_tick_kinesis():
+    """Produce one reading for every engine to Kinesis as plain JSON — the
+    swappable twin of _produce_tick. Reuses the SAME engine sim (ENGINES/_step/
+    _build_event), so both backends emit the identical event dict; only the wire
+    format differs (JSON here vs Avro on Kafka). Shares _produce_lock + the cost
+    gate because ENGINES is one global random walk.
+
+    PartitionKey = engine_id, the direct analogue of the Kafka message key: it
+    routes a given engine's records to one shard, preserving per-engine order.
+    Unlike Kafka there's no flush — put_record is synchronous and confirmed (shard
+    id + sequence number) on return, so a failure is known immediately. Returns
+    (produced, stream_name, errors) to mirror _produce_tick. Blocking — call via
+    asyncio.to_thread."""
+    errors = []
+    with _produce_lock:
+        _enforce_rate_gate()  # 429s inside the cooldown before touching Kinesis
+
+        client, stream = _kinesis_client()
+        produced = 0
+        for engine_id in ENGINES:
+            ENGINES[engine_id] = _step(ENGINES[engine_id])
+            event = _build_event(engine_id, ENGINES[engine_id])
+            try:
+                client.put_record(
+                    StreamName=stream,
+                    Data=json.dumps(event).encode(),
+                    PartitionKey=engine_id,
+                )
+                produced += 1
+            except Exception as exc:  # one PutRecord failure shouldn't abort the tick
+                errors.append(str(exc))
+
+    return produced, stream, errors
 
 
 # ─── Routes ──────────────────────────────────────────────────────────────────
@@ -314,9 +374,12 @@ async def query(name: str = Query(...)):
 
 
 @router.post("/produce")
-async def produce():
+async def produce(source: str = Query("kafka")):
+    """Emit one tick of telemetry to the SELECTED backend. ?source=kafka|kinesis;
+    an unknown source falls back to Kafka. Same engine sim + cost gate either way."""
+    tick = produce_tick_kinesis if source == "kinesis" else _produce_tick
     try:
-        produced, topic, errors = await asyncio.to_thread(_produce_tick)
+        produced, target, errors = await asyncio.to_thread(tick)
     except _Throttled as exc:
         retry_after = max(1, math.ceil(exc.retry_after))
         return JSONResponse(
@@ -324,7 +387,9 @@ async def produce():
             content={"error": "rate limited", "retry_after_seconds": retry_after},
             headers={"Retry-After": str(retry_after)},
         )
-    body = {"produced": produced, "topic": topic}
+    # Preserve the Kafka response's "topic" key; label the Kinesis target "stream".
+    body = {"produced": produced, "source": source}
+    body["stream" if source == "kinesis" else "topic"] = target
     if errors:
         body["errors"] = errors
         return JSONResponse(status_code=502, content=body)
