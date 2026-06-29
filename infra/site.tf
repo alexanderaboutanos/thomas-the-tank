@@ -98,6 +98,7 @@ locals {
   # /produce, which is a POST (so it needs the full method set).
   alb_behaviors = [
     { path = "/stream*", methods = ["GET", "HEAD", "OPTIONS"] },
+    { path = "/internals", methods = ["GET", "HEAD", "OPTIONS"] },
     { path = "/latest", methods = ["GET", "HEAD", "OPTIONS"] },
     { path = "/query", methods = ["GET", "HEAD", "OPTIONS"] },
     { path = "/healthz", methods = ["GET", "HEAD", "OPTIONS"] },
@@ -142,9 +143,10 @@ resource "aws_cloudfront_distribution" "site" {
     cache_policy_id        = data.aws_cloudfront_cache_policy.optimized.id
   }
 
-  # App routes → the ALB origin: SSE live view (/stream) + the folded serving
-  # routes (/produce, /latest, /query) + the health check. Caching disabled,
-  # whole request forwarded, no compression (SSE must stream, not buffer).
+  # App routes → the ALB origin: SSE live view (/stream) + the Stream Internals
+  # readout (/internals) + the folded serving routes (/produce, /latest, /query) +
+  # the health check. Caching disabled, whole request forwarded (so ?source= reaches
+  # the app), no compression (SSE must stream, not buffer).
   dynamic "ordered_cache_behavior" {
     for_each = local.alb_behaviors
     content {
