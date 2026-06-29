@@ -8,17 +8,27 @@
 # never disturbed. The Kinesis path carries plain JSON (JSON-for-practice now; AWS
 # Glue Schema Registry is the productionizing step — documented in notes/KINESIS.md).
 #
-# COST: one shard is standing, always-on capacity (~$11/mo + PUT payload units),
-# unlike the rest of this project's destroy-to-~$0 posture. `terraform destroy` (or
-# removing this file) tears the stream down cleanly — nothing else depends on it.
+# COST: each shard is standing, always-on capacity (~$11/mo/shard + PUT payload
+# units), unlike the rest of this project's destroy-to-~$0 posture. At 3 shards
+# that's ~$33/mo. `terraform destroy` (or removing this file) tears the stream
+# down cleanly — nothing else depends on it.
 
 resource "aws_kinesis_stream" "telemetry" {
   name = "${local.name_prefix}-telemetry"
 
-  # One shard is the simplest legible unit: exactly one shard ⇒ one GetShardIterator
-  # + one get_records loop in the consumer. It also stays well under the per-shard
-  # limits (5 GetRecords TPS, 2 MB/s read, 1 MB/s + 1000 rec/s write) at demo volume.
-  shard_count = 1
+  # Three shards MIRROR the Kafka topic's three partitions, so the lever is a true
+  # side-by-side: each backend fans the same engines across the same number of
+  # ordering/throughput units, and the Stream Internals panel reads out 3-vs-3
+  # (a partition's offset beside a shard's sequence number). Both counts are wildly
+  # over-provisioned for ~5 records/2s — that's deliberate symmetry, not capacity.
+  #
+  # NOTE: Kinesis won't scale shard_count by more than 2x in one UpdateShardCount
+  # call, so a 1->3 change can't apply in place — recreate with
+  # `terraform apply -replace=aws_kinesis_stream.telemetry` (the stream holds only a
+  # disposable LATEST tail; the name, hence the ARN and its scoped IAM policy, is
+  # unchanged). Still trivial vs the per-shard limits (5 GetRecords TPS, 2 MB/s read,
+  # 1 MB/s + 1000 rec/s write).
+  shard_count = 3
 
   # Hours of retention (Kinesis's analogue of Kafka's topic retention). 24 is the
   # floor and all we need — the live tap only ever reads from the live edge (LATEST).

@@ -128,6 +128,11 @@ def run_consumer(state, cfg, stop_event):
     consumer.subscribe([cfg.topic])
     log.info("live consumer subscribed to %s as group %s", cfg.topic, cfg.group_id)
     messages_total = 0
+    # The live tap reads all of the topic's partitions, each with its OWN
+    # independent offset; keep the latest offset this consumer has reached per
+    # partition so the panel shows every partition at once (one offset jumps around
+    # only because messages round-robin across partitions — see notes/KINESIS.md).
+    partition_offsets = {}        # partition -> latest offset consumed
     try:
         while not stop_event.is_set():
             msg = consumer.poll(1.0)
@@ -146,17 +151,28 @@ def run_consumer(state, cfg, stop_event):
             if event:
                 state.update(event)
                 messages_total += 1
-                # Publish Kafka's machinery for the Stream Internals panel — the
-                # partition + offset are the direct twins of Kinesis's shard +
+                partition_offsets[msg.partition()] = msg.offset()
+                # Surface EVERY assigned partition, not just ones that have
+                # delivered a message — so the panel reads a full 3-vs-3 against
+                # Kinesis's 3 shards (which are always all enumerated). A partition
+                # no engine keys into stays at a null offset, the exact twin of an
+                # empty Kinesis shard's null sequence number. assignment() is the
+                # local cached set, so this is cheap to re-check each message.
+                for tp in consumer.assignment():
+                    partition_offsets.setdefault(tp.partition, None)
+                # Publish Kafka's machinery for the Stream Internals panel — each
+                # partition's offset is the direct twin of a Kinesis shard's
                 # sequence number (see update_meta and notes/KINESIS.md).
                 state.update_meta(
                     {
                         "backend": "kafka",
                         "topic": cfg.topic,
                         "group_id": cfg.group_id,
-                        "partition": msg.partition(),
-                        "offset": msg.offset(),
                         "messages_total": messages_total,
+                        "partitions": [
+                            {"partition": p, "offset": partition_offsets[p]}
+                            for p in sorted(partition_offsets)
+                        ],
                     }
                 )
     finally:
@@ -200,7 +216,12 @@ def run_kinesis_consumer(state, cfg, stop_event):
 
     iterators = {}            # shard_id -> shard iterator; empty ⇒ (re)acquire
     records_total = 0
-    last_sequence = None
+    # Per-shard machinery for the Stream Internals panel — each shard, like a Kafka
+    # partition, carries its OWN independent sequence number. Persists across poll
+    # cycles (a shard that drew no records this poll keeps its last-known sequence
+    # rather than blanking). shard_id -> {sequence_number, millis_behind_latest,
+    # records_last_poll, records_total}.
+    shard_state = {}
     log.info("live kinesis consumer starting on stream %s", stream)
     try:
         while not stop_event.is_set():
@@ -212,6 +233,11 @@ def run_kinesis_consumer(state, cfg, stop_event):
                     resp = client.get_records(ShardIterator=iterators[shard_id], Limit=200)
                     iterators[shard_id] = resp["NextShardIterator"]
                     records = resp["Records"]
+                    st = shard_state.setdefault(
+                        shard_id,
+                        {"sequence_number": None, "millis_behind_latest": None,
+                         "records_last_poll": 0, "records_total": 0},
+                    )
                     for rec in records:
                         try:
                             event = json.loads(rec["Data"])
@@ -220,22 +246,27 @@ def run_kinesis_consumer(state, cfg, stop_event):
                             continue
                         state.update(event)
                         records_total += 1
-                        last_sequence = rec["SequenceNumber"]
-                    # Publish Kinesis's machinery for the Stream Internals panel.
-                    # MillisBehindLatest is the iterator age — how far behind the
-                    # tip this read sits (the Kinesis analogue of consumer lag).
-                    state.update_meta(
-                        {
-                            "backend": "kinesis",
-                            "stream_name": stream,
-                            "shard_id": shard_id,
-                            "sequence_number": last_sequence,
-                            "millis_behind_latest": resp["MillisBehindLatest"],
-                            "iterator_type": "LATEST",
-                            "records_last_poll": len(records),
-                            "records_total": records_total,
-                        }
-                    )
+                        st["records_total"] += 1
+                        st["sequence_number"] = rec["SequenceNumber"]
+                    # MillisBehindLatest is the iterator age — how far behind the tip
+                    # this read sits (Kinesis's analogue of per-partition consumer lag);
+                    # it comes back per GetRecords even when the batch is empty.
+                    st["millis_behind_latest"] = resp["MillisBehindLatest"]
+                    st["records_last_poll"] = len(records)
+                # ONE readout per full shard sweep, every shard at once — the twin of
+                # the Kafka panel's per-partition offsets (see notes/KINESIS.md).
+                state.update_meta(
+                    {
+                        "backend": "kinesis",
+                        "stream_name": stream,
+                        "iterator_type": "LATEST",
+                        "records_total": records_total,
+                        "shards": [
+                            {"shard_id": sid, **shard_state[sid]}
+                            for sid in sorted(shard_state)
+                        ],
+                    }
+                )
             except client.exceptions.ExpiredIteratorException:
                 # The iterator's ~5-min TTL lapsed; drop them so the next cycle
                 # re-takes at the live edge. We never replay, so this loses nothing.

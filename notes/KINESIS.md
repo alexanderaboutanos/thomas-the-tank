@@ -73,9 +73,12 @@ client library handles partitions and offsets under the hood. kinesis (the plain
 3. `get_records(iterator)` → a batch of records **plus** a `NextShardIterator` **plus** `MillisBehindLatest`.
 4. feed `NextShardIterator` back into the next `get_records`. repeat. sleep ~1s so you stay under the 5-calls/s/shard ceiling.
 
-with one shard (this stream) that's exactly one iterator and one loop — about as simple
-as it gets. `MillisBehindLatest` is how far behind the tip the batch is: the **iterator
-age**, kinesis's version of consumer lag. the Stream Internals panel puts it on screen.
+this stream runs **3 shards** — deliberately matching the kafka topic's 3 partitions so
+the lever is a true side-by-side (3 offsets ↔ 3 sequence numbers in the Stream Internals
+panel), not because the volume needs it. so the loop holds 3 iterators and sweeps all of
+them each cycle, then publishes one readout. `MillisBehindLatest` comes back per shard: how
+far behind the tip that shard's batch is — the **iterator age**, kinesis's per-shard version
+of consumer lag. the panel puts each shard's sequence number + age on screen.
 
 ## Resharding (the big difference from kafka)
 

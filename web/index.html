@@ -101,6 +101,11 @@
     .stat .k { font-size: .6rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #6b7280; }
     .stat .v { font-size: 1rem; font-weight: 700; color: var(--nwr-blue-dark); font-variant-numeric: tabular-nums; word-break: break-all; line-height: 1.25; margin-top: .15rem; }
     .stat .hint { font-size: .6rem; color: #98a0ac; margin-top: .15rem; }
+    /* Per-partition / per-shard cards: one ordering unit each, accented so they
+       read as the "fan-out" group distinct from the stream-level scalars above. */
+    .stat.unit { border-left: 3px solid var(--nwr-blue); }
+    .internals-units-label { grid-column: 1 / -1; margin: .2rem 0 -.2rem; font-size: .62rem;
+      font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #6b7280; }
 
     /* Live-tap badge in the live-view header. Tracks DATA freshness, not just the
        socket: `live` (fresh readings landing), `idle` (connected but quiet — trains
@@ -576,29 +581,50 @@
     // Polls /internals for whichever backend is selected and renders it in that
     // backend's native vocabulary, with a one-line "≈ the other side" subtitle so
     // the toggle teaches the Kafka↔Kinesis mapping instead of hiding it.
+    // Shorten "shardId-000000000000" to its index ("0") for a card title.
+    function shortShard(id) {
+      const m = /shardId-0*(\d+)$/.exec(id || "");
+      return m ? m[1] : (id || "—");
+    }
+
+    // Each backend: `fields` are stream-level scalars; `units` are one card per
+    // ordering unit — a Kafka partition (its offset) or a Kinesis shard (its
+    // sequence number), the two being direct twins. The same engines fan across
+    // the same count of units on either side (3 partitions ↔ 3 shards), so the
+    // panel reads 3-vs-3 instead of letting one jumping number stand in for all.
     const INTERNALS = {
       kafka: {
         label: "Confluent Kafka",
-        sub: "Kafka’s machinery — partition + offset are the twins of Kinesis’s shard + sequence number.",
+        sub: "Kafka’s machinery — each partition’s offset is the twin of a Kinesis shard’s sequence number.",
         fields: m => [
-          ["Topic",          m.topic,         ""],
-          ["Consumer group", m.group_id,      "the live tap’s group"],
-          ["Partition",      m.partition,     "ordering + parallelism unit ≈ shard"],
-          ["Offset",         m.offset,        "position in the partition ≈ sequence number"],
+          ["Topic",          m.topic,          ""],
+          ["Consumer group", m.group_id,       "the live tap’s group"],
           ["Messages seen",  m.messages_total, "this session"],
         ],
+        unitsLabel: "Partitions — one offset each",
+        units: m => (m.partitions || []).map(p => ({
+          k: "Partition " + p.partition,
+          v: p.offset,
+          hint: "offset — position in this partition",
+        })),
       },
       kinesis: {
         label: "AWS Kinesis",
-        sub: "Kinesis’s machinery — shard + sequence number are the twins of Kafka’s partition + offset.",
+        sub: "Kinesis’s machinery — each shard’s sequence number is the twin of a Kafka partition’s offset.",
         fields: m => [
-          ["Stream",          m.stream_name,      ""],
-          ["Shard",           m.shard_id,         "ordering + throughput unit ≈ partition"],
-          ["Sequence number", m.sequence_number,  "position in the shard ≈ offset"],
-          ["Iterator age",    m.millis_behind_latest == null ? "—" : m.millis_behind_latest + " ms",
-                                                  "ms behind the live edge ≈ consumer lag"],
-          ["Records / poll",  m.records_last_poll, "last GetRecords batch"],
+          ["Stream",        m.stream_name,   ""],
+          ["Iterator type", m.iterator_type, "where each shard starts ≈ auto.offset.reset"],
+          ["Records seen",  m.records_total, "this session"],
         ],
+        unitsLabel: "Shards — one sequence number each",
+        units: m => (m.shards || []).map(s => ({
+          k: "Shard " + shortShard(s.shard_id),
+          v: s.sequence_number,
+          // iterator age is the live, per-shard bit (≈ that partition's consumer lag);
+          // fall back to naming the value when a shard hasn't reported yet.
+          hint: (s.millis_behind_latest == null ? "" : s.millis_behind_latest + " ms behind the edge")
+                || "sequence number — position in this shard",
+        })),
       },
     };
 
@@ -620,9 +646,17 @@
           grid.innerHTML = `<p class="muted">no readings yet — pull the lever to wake the ${def.label} stream…</p>`;
           return;
         }
-        grid.innerHTML = def.fields(m).map(([k, v, hint]) =>
-          `<div class="stat"><div class="k">${k}</div><div class="v">${fmtStat(v)}</div>` +
-          (hint ? `<div class="hint">${hint}</div>` : "") + `</div>`).join("");
+        const card = (k, v, hint, cls) =>
+          `<div class="stat${cls ? " " + cls : ""}"><div class="k">${k}</div>` +
+          `<div class="v">${fmtStat(v)}</div>` +
+          (hint ? `<div class="hint">${hint}</div>` : "") + `</div>`;
+        const scalars = def.fields(m).map(([k, v, hint]) => card(k, v, hint, ""));
+        const units = def.units(m);
+        const unitCards = units.length
+          ? [`<div class="internals-units-label">${def.unitsLabel}</div>`]
+              .concat(units.map(u => card(u.k, u.v, u.hint, "unit")))
+          : [];
+        grid.innerHTML = scalars.concat(unitCards).join("");
       } catch (err) {
         if (src === currentSource) grid.innerHTML = `<p class="muted">stream internals unavailable — see the console.</p>`;
         console.error("internals poll failed", err);
