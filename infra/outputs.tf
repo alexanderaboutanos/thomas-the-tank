@@ -22,3 +22,13 @@ output "consumer_image_uri" {
   description = "Content-hash-tagged URI of the live-tap consumer image; the ECS task definition references this."
   value       = local.consumer_image_uri
 }
+
+output "kinesis_stream_name" {
+  description = "Name of the Kinesis Data Stream — the swappable second stream backend (KINESIS_STREAM_NAME on the task)."
+  value       = aws_kinesis_stream.telemetry.name
+}
+
+output "kinesis_stream_arn" {
+  description = "ARN of the Kinesis Data Stream; the task role's Kinesis policy is scoped to exactly this."
+  value       = aws_kinesis_stream.telemetry.arn
+}

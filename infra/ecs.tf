@@ -106,6 +106,11 @@ resource "aws_ecs_task_definition" "live" {
       { name = "HEARTBEAT_SECONDS", value = "20" },
       { name = "NUM_ENGINES", value = tostring(var.num_engines) },
       { name = "PORT", value = tostring(var.container_port) },
+      # Kinesis backend (the swappable second stream). No secret — boto3 in the
+      # container authenticates via the TASK ROLE (see kinesis.tf), not env keys.
+      # AWS_REGION is what boto3 reads to reach the regional Kinesis endpoint.
+      { name = "AWS_REGION", value = var.region },
+      { name = "KINESIS_STREAM_NAME", value = aws_kinesis_stream.telemetry.name },
     ]
 
     # Secret config, one JSON key per env var (valueFrom "<arn>:<json-key>::").

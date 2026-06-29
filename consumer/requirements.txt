@@ -9,3 +9,7 @@ cryptography>=42.0
 fastapi>=0.110
 uvicorn[standard]>=0.27
 python-dotenv>=1.0
+# boto3 powers the swappable Kinesis stream backend (read + write of plain-JSON
+# telemetry). On AWS it authenticates via the ECS task role; locally via AWS_PROFILE.
+# See live.py (run_kinesis_consumer) and serving.py (produce_tick_kinesis).
+boto3>=1.34
