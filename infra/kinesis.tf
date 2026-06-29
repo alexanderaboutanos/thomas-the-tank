@@ -1,5 +1,5 @@
 # AWS Kinesis Data Stream — the SECOND, swappable stream backend beside Confluent
-# Kafka (see notes/PLAN_KINESIS_LEVER.md, notes/KINESIS.md). A viewer flips a
+# Kafka (see notes/KINESIS.md). A viewer flips a
 # front-end lever to route the same train telemetry through either service;
 # everything downstream (the in-memory event dict, the SSE layer, the web table)
 # is transport-agnostic, so only the wire format changes per backend.
@@ -42,8 +42,8 @@ resource "aws_kinesis_stream" "telemetry" {
 # that — boto3 in the container picks up the TASK ROLE's credentials automatically
 # (no keys in env) and calls Kinesis directly. We grant that role ONLY the actions
 # this app needs, scoped to exactly this stream's ARN — least privilege, mirroring
-# the execution role's secrets policy (ecs.tf:48-65). Showing real IAM-scoped
-# access is a feature for an employer to see, not an accident.
+# the execution role's secrets policy (ecs.tf:48-65). The narrow scope is
+# deliberate: least privilege over a blanket grant.
 
 data "aws_iam_policy_document" "task_kinesis" {
   statement {
