@@ -11,8 +11,6 @@ Confluent Kafka — the identical pipeline over a swappable transport, side by s
 I loved Thomas the Tank Engine as a kid, so the theme was a given — the North Western Railway
 on the Island of Sodor.
 
-**Live demo:** https://d3seigtcpso2da.cloudfront.net — deployed in AWS `us-east-2`.
-
 ## Architecture
 
 ![North Western Railway streaming data pipeline — engine telemetry produced to two swappable stream backends side by side: a three-partition Kafka topic on Confluent Cloud (Avro) and a parallel three-shard AWS Kinesis Data Stream (JSON). A Snowflake Sink Connector reads the Kafka topic into Snowflake for analytics; an always-on ECS Fargate task taps both backends and streams to the web view over SSE, where a lever selects which backend is shown; analytics queries round-trip through that task to Snowflake.](web/architecture.svg)
