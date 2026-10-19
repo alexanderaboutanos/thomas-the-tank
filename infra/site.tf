@@ -37,12 +37,16 @@ resource "aws_s3_object" "thomas" {
 
 # Architecture diagram for the About tab. index.html references it as
 # "architecture.svg"; the same self-contained file is embedded in the README.
+# no-cache so a re-uploaded diagram revalidates on the next load (matching
+# index.html and README.md). Without it the browser heuristically caches the SVG
+# and keeps showing a stale diagram even after the README text has updated.
 resource "aws_s3_object" "architecture" {
-  bucket       = aws_s3_bucket.site.id
-  key          = "architecture.svg"
-  source       = "${path.module}/../web/architecture.svg"
-  etag         = filemd5("${path.module}/../web/architecture.svg")
-  content_type = "image/svg+xml"
+  bucket        = aws_s3_bucket.site.id
+  key           = "architecture.svg"
+  source        = "${path.module}/../web/architecture.svg"
+  etag          = filemd5("${path.module}/../web/architecture.svg")
+  content_type  = "image/svg+xml"
+  cache_control = "no-cache"
 }
 
 # The repo README, rendered verbatim in the About tab as the single source of
